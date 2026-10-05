@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/harmonicr/email-router/internal/config"
+	"github.com/thomasteoh/smtp-router/internal/config"
 )
 
 // Sender is the interface a delivery provider implements.

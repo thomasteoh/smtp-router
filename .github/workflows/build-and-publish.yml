@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  IMAGE: ghcr.io/harmonicr/email-router
+  IMAGE: ghcr.io/thomasteoh/smtp-router
   GO_VERSION: "1.26"
 
 jobs:

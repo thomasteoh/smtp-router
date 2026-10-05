@@ -1,4 +1,4 @@
-module github.com/harmonicr/email-router
+module github.com/thomasteoh/smtp-router
 
 go 1.26.0
 

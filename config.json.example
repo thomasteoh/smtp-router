@@ -45,7 +45,7 @@
   ],
   "oidc": {
     "issuer": "https://auth.harmonicr.com",
-    "client_id": "email-router-oidc-client",
+    "client_id": "smtp-router-oidc-client",
     "client_secret": "oidc-client-secret",
     "scopes": ["openid", "profile"],
     "admin_role": "mail-admin",

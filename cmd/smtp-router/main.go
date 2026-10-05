@@ -1,4 +1,4 @@
-// Command email-router is a lightweight outbound email routing service.
+// Command smtp-router is a lightweight outbound email routing service.
 //
 // It accepts send requests from first-party apps over an internal HTTP JSON
 // API, applies sender allow/deny rules, selects an upstream delivery provider
@@ -16,12 +16,12 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/harmonicr/email-router/internal/cli"
+	"github.com/thomasteoh/smtp-router/internal/cli"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: email-router <serve|admin> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: smtp-router <serve|admin> [flags]")
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
@@ -30,7 +30,7 @@ func main() {
 		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 		cfgPath := fs.String("config", "", "path to config file (env or YAML)")
 		addr := fs.String("addr", ":8080", "listen address")
-		dbPath := fs.String("db", "email-router.db", "sqlite audit database path")
+		dbPath := fs.String("db", "smtp-router.db", "sqlite audit database path")
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)

@@ -1,4 +1,4 @@
-// Package oidc integrates the email-router with Zitadel for human admin
+// Package oidc integrates the smtp-router with Zitadel for human admin
 // access. It verifies ID tokens from the configured OIDC issuer and gates
 // admin routes by a role claim.
 package oidc

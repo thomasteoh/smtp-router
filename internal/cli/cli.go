@@ -1,4 +1,4 @@
-// Package cli implements the email-router command-line interface: `serve`
+// Package cli implements the smtp-router command-line interface: `serve`
 // and `admin` subcommands. Admin operations mirror the HTTP admin API.
 package cli
 
@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/harmonicr/email-router/internal/auth"
-	"github.com/harmonicr/email-router/internal/audit"
-	"github.com/harmonicr/email-router/internal/config"
-	"github.com/harmonicr/email-router/internal/oidc"
-	"github.com/harmonicr/email-router/internal/ratelimit"
-	"github.com/harmonicr/email-router/internal/rules"
-	"github.com/harmonicr/email-router/internal/server"
-	"github.com/harmonicr/email-router/internal/webhook"
+	"github.com/thomasteoh/smtp-router/internal/auth"
+	"github.com/thomasteoh/smtp-router/internal/audit"
+	"github.com/thomasteoh/smtp-router/internal/config"
+	"github.com/thomasteoh/smtp-router/internal/oidc"
+	"github.com/thomasteoh/smtp-router/internal/ratelimit"
+	"github.com/thomasteoh/smtp-router/internal/rules"
+	"github.com/thomasteoh/smtp-router/internal/server"
+	"github.com/thomasteoh/smtp-router/internal/webhook"
 )
 
 // Serve runs the HTTP API server.
@@ -70,7 +70,7 @@ func Serve(cfgPath, addr, dbPath string) error {
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
-	fmt.Printf("email-router listening on %s (db %s)\n", addr, dbPath)
+	fmt.Printf("smtp-router listening on %s (db %s)\n", addr, dbPath)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -80,7 +80,7 @@ func Serve(cfgPath, addr, dbPath string) error {
 // Admin runs an admin subcommand.
 func Admin(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: email-router admin <subcommand> [args]")
+		return fmt.Errorf("usage: smtp-router admin <subcommand> [args]")
 	}
 	sub := args[0]
 	switch sub {
@@ -99,7 +99,7 @@ func Admin(args []string) error {
 
 func adminAddClient(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: email-router admin add-client <name>")
+		return fmt.Errorf("usage: smtp-router admin add-client <name>")
 	}
 	name := args[0]
 	au := auth.New()
@@ -128,7 +128,7 @@ func adminUsage(args []string) error {
 	// Read the audit store and print per-account counts for the current
 	// windows (day + month) from the limiter state. In this minimal CLI we
 	// report audit counts by status.
-	dbPath := firstNonEmpty(args, "email-router.db")
+	dbPath := firstNonEmpty(args, "smtp-router.db")
 	ad, err := audit.Open(dbPath)
 	if err != nil {
 		return err
@@ -156,7 +156,7 @@ func adminUsage(args []string) error {
 }
 
 func adminListAudit(args []string) error {
-	dbPath := firstNonEmpty(args, "email-router.db")
+	dbPath := firstNonEmpty(args, "smtp-router.db")
 	ad, err := audit.Open(dbPath)
 	if err != nil {
 		return err

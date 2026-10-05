@@ -1,4 +1,4 @@
-// Package config loads the email-router configuration from an environment
+// Package config loads the smtp-router configuration from an environment
 // file or YAML. It defines the providers, accounts, rate limits, rules,
 // clients (API keys), webhooks, and OIDC settings the router operates with.
 package config

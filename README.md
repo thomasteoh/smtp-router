@@ -1,4 +1,4 @@
-# harmonicr email-router
+# harmonicr smtp-router
 
 A lightweight outbound email routing service for the harmonicr infrastructure.
 It accepts send requests from first-party apps, applies sender allow/deny rules,
@@ -30,7 +30,7 @@ go test ./...
 ## Run (serve)
 
 ```sh
-email-router serve -config config.json -addr :8080 -db email-router.db
+smtp-router serve -config config.json -addr :8080 -db smtp-router.db
 ```
 
 Environment variables may be used in place of a file: set `EMAIL_ROUTER_CONFIG`
@@ -53,10 +53,10 @@ Response statuses: `200 delivered`, `429 rate_limited`, `403 denied`,
 
 ```sh
 # CLI
-email-router admin add-client <name>       # prints a new per-client key
-email-router admin list-clients
-email-router admin usage
-email-router admin list-audit
+smtp-router admin add-client <name>       # prints a new per-client key
+smtp-router admin list-clients
+smtp-router admin usage
+smtp-router admin list-audit
 
 # API (token-gated)
 curl -H 'Authorization: Bearer <admin-token>' http://127.0.0.1:8080/admin/audit
@@ -74,7 +74,7 @@ See `config.json.example` for the full shape: providers (smtp|api), accounts
 ## Deploy
 
 Built as a container image via GitHub Actions → **GHCR**
-(`ghcr.io/harmonicr/email-router`), pulled on the solo VM and run rootless
+(`ghcr.io/thomasteoh/smtp-router`), pulled on the solo VM and run rootless
 under Podman. See `.github/workflows/build-and-publish.yml`.
 
 ## Security

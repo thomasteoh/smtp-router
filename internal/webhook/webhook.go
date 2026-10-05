@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/harmonicr/email-router/internal/config"
+	"github.com/thomasteoh/smtp-router/internal/config"
 )
 
 // Event names.

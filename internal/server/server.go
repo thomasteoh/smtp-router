@@ -1,4 +1,4 @@
-// Package server exposes the email-router HTTP API: the send endpoint and
+// Package server exposes the smtp-router HTTP API: the send endpoint and
 // token-gated admin endpoints, plus health/readiness.
 package server
 
@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/harmonicr/email-router/internal/auth"
-	"github.com/harmonicr/email-router/internal/audit"
-	"github.com/harmonicr/email-router/internal/config"
-	"github.com/harmonicr/email-router/internal/oidc"
-	"github.com/harmonicr/email-router/internal/provider"
-	"github.com/harmonicr/email-router/internal/ratelimit"
-	"github.com/harmonicr/email-router/internal/rules"
-	"github.com/harmonicr/email-router/internal/webhook"
+	"github.com/thomasteoh/smtp-router/internal/auth"
+	"github.com/thomasteoh/smtp-router/internal/audit"
+	"github.com/thomasteoh/smtp-router/internal/config"
+	"github.com/thomasteoh/smtp-router/internal/oidc"
+	"github.com/thomasteoh/smtp-router/internal/provider"
+	"github.com/thomasteoh/smtp-router/internal/ratelimit"
+	"github.com/thomasteoh/smtp-router/internal/rules"
+	"github.com/thomasteoh/smtp-router/internal/webhook"
 )
 
 // Server is the HTTP API server.

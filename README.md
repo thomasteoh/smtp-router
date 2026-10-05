@@ -27,15 +27,23 @@ go build ./...
 go test ./...
 ```
 
+Install to PATH:
+
+```sh
+go install github.com/thomasteoh/smtp-router/cmd/smtp-router@latest
+```
+
 ## Run (serve)
 
 ```sh
 smtp-router serve -config config.json -addr :8080 -db smtp-router.db
 ```
 
-Environment variables may be used in place of a file: set `EMAIL_ROUTER_CONFIG`
-to a config path, `EMAIL_ROUTER_ADMIN_TOKEN` for the admin token, and
-`EMAIL_ROUTER_DEFAULT_DAY` / `EMAIL_ROUTER_DEFAULT_MONTH` for the default rate.
+Environment variables may be used in place of a file: set `SMTP_ROUTER_CONFIG`
+to a config path, `SMTP_ROUTER_ADMIN_TOKEN` for the admin token, and
+`SMTP_ROUTER_DEFAULT_DAY` / `SMTP_ROUTER_DEFAULT_MONTH` for the default rate.
+The server refuses to start without an admin token (admin access fails closed)
+and without at least one provider and one account.
 
 ## Send
 
@@ -44,6 +52,18 @@ curl -X POST http://127.0.0.1:8080/send \
   -H 'X-API-Key: <client-key>' \
   -d '{"from":"alerts@harmonicr.com","to":["x@example.com"],
        "subject":"hi","body":"hello"}'
+```
+
+Attachments (optional, base64 content):
+
+```sh
+curl -X POST http://127.0.0.1:8080/send \
+  -H 'X-API-Key: <client-key>' \
+  -d '{"from":"alerts@harmonicr.com","to":["x@example.com"],
+       "subject":"hi","body":"hello",
+       "attachments":[{"filename":"report.pdf",
+                       "content_type":"application/pdf",
+                       "content_b64":"JVBERi0xLjQK..."}]}'
 ```
 
 Response statuses: `200 delivered`, `429 rate_limited`, `403 denied`,
@@ -77,15 +97,33 @@ Built as a container image via GitHub Actions → **GHCR**
 (`ghcr.io/thomasteoh/smtp-router`), pulled on the solo VM and run rootless
 under Podman. See `.github/workflows/build-and-publish.yml`.
 
+Local container run:
+
+```sh
+podman run --rm -p 52150:8080 \
+  -v /opt/smtp-router:/opt/smtp-router:ro \
+  -v smtp-router-data:/opt/smtp-router-data \
+  -e SMTP_ROUTER_ADMIN_TOKEN=... \
+  ghcr.io/thomasteoh/smtp-router:latest \
+  serve -config /opt/smtp-router/config.json -db /opt/smtp-router-data/smtp-router.db
+```
+
 ## Security
 
-- Per-client API keys (generated, stored hashed) gate `POST /send`.
+- Per-client API keys (generated, stored hashed) gate `POST /send`. A client
+  may only send from the `from` addresses it is bound to (`allowed_from`).
 - No open relay: only allowlisted `from` addresses may send; denylist enforced.
+- Header injection is blocked: CR/LF in `from`, `to`, `subject`, or attachment
+  filenames/content types is rejected before any MIME is built.
+- SMTP providers support STARTTLS and implicit TLS (no cleartext delivery when
+  configured); API providers require the upstream be configured with a URL.
 - Upstream credentials live in the container env/secret file, never returned to
   callers, never logged.
 - Logs record client + account + provider + status only — never message content.
-- Admin API is token-gated; human access via OIDC with role gating.
+- Admin API is token-gated and fails closed (no token configured = no admin
+  access); human access via OIDC with role gating.
 - Webhooks are HMAC-signed so receivers can verify authenticity.
+- Server timeouts (read/header/write/idle) are set on the HTTP listener.
 
 ## Scope boundaries
 

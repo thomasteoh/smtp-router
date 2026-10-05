@@ -3,7 +3,6 @@ package server
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"net"
 	"net/http/httptest"
@@ -217,5 +216,3 @@ func TestSendUnauthorized(t *testing.T) {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
 }
-
-var _ = context.Background

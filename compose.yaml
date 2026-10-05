@@ -8,9 +8,9 @@ services:
     network_mode: host
     command: ["serve", "-config", "/opt/smtp-router/config.json", "-addr", ":8080", "-db", "/opt/smtp-router-data/smtp-router.db"]
     environment:
-      EMAIL_ROUTER_ADMIN_TOKEN: ${EMAIL_ROUTER_ADMIN_TOKEN}
-      EMAIL_ROUTER_DEFAULT_DAY: ${EMAIL_ROUTER_DEFAULT_DAY}
-      EMAIL_ROUTER_DEFAULT_MONTH: ${EMAIL_ROUTER_DEFAULT_MONTH}
+      SMTP_ROUTER_ADMIN_TOKEN: ${SMTP_ROUTER_ADMIN_TOKEN}
+      SMTP_ROUTER_DEFAULT_DAY: ${SMTP_ROUTER_DEFAULT_DAY}
+      SMTP_ROUTER_DEFAULT_MONTH: ${SMTP_ROUTER_DEFAULT_MONTH}
     volumes:
       - /opt/smtp-router:/opt/smtp-router:ro
       - smtp-router-data:/opt/smtp-router-data
@@ -18,7 +18,9 @@ services:
       # Caddy terminates TLS at smtp.harmonicr.com and proxies here.
       - "52150:8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      # The runtime is scratch (no shell/wget), so exec the binary's health
+      # subcommand directly against the mounted DB.
+      test: ["CMD", "/smtp-router", "health", "-db", "/opt/smtp-router-data/smtp-router.db"]
       interval: 30s
       timeout: 5s
       retries: 3

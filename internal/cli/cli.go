@@ -3,12 +3,8 @@
 package cli
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/thomasteoh/smtp-router/internal/auth"
@@ -26,6 +22,9 @@ func Serve(cfgPath, addr, dbPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	cfg.Normalize()
 
@@ -63,12 +62,16 @@ func Serve(cfgPath, addr, dbPath string) error {
 	if err != nil {
 		return err
 	}
+	// Record the config path so admin mutations persist across restart.
+	s.SetConfigPath(cfgPath)
 
 	srv := &http.Server{
-		Addr:         addr,
-		Handler:      s.Handler(),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		Addr:              addr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	fmt.Printf("smtp-router listening on %s (db %s)\n", addr, dbPath)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -172,6 +175,24 @@ func adminListAudit(args []string) error {
 	return nil
 }
 
+// Health checks that the audit store is reachable. It is designed to be
+// exec-able by a container healthcheck without any shell or network tools.
+func Health(dbPath string) error {
+	if dbPath == "" {
+		dbPath = "smtp-router.db"
+	}
+	ad, err := audit.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer ad.Close()
+	if _, err := ad.Count(""); err != nil {
+		return err
+	}
+	fmt.Println("ok")
+	return nil
+}
+
 func firstNonEmpty(args []string, def string) string {
 	for _, a := range args {
 		if a != "" {
@@ -180,8 +201,3 @@ func firstNonEmpty(args []string, def string) string {
 	}
 	return def
 }
-
-var _ = context.Background
-var _ = json.Marshal
-var _ = strings.TrimSpace
-var _ = os.Exit

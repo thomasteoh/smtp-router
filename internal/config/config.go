@@ -10,17 +10,19 @@ import (
 	"strings"
 )
 
-// Provider is an upstream delivery provider: either SMTP (host/port/auth) or
-// an HTTP API (url/token/method).
+// Provider is an upstream delivery provider: either SMTP (host/port/auth,
+// tls/starttls) or an HTTP API (url/token/method).
 type Provider struct {
-	Name   string `json:"name"`
-	Type   string `json:"type"` // "smtp" or "api"
-	Host   string `json:"host"`
-	Port   int    `json:"port"`
-	Auth   string `json:"auth"` // SMTP username:password or API token
-	URL    string `json:"url"`
-	Token  string `json:"token"`
-	Method string `json:"method"`
+	Name     string `json:"name"`
+	Type     string `json:"type"` // "smtp" or "api"
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Auth     string `json:"auth"` // SMTP username:password or API token
+	URL      string `json:"url"`
+	Token    string `json:"token"`
+	Method   string `json:"method"`
+	TLS      bool   `json:"tls"`      // implicit TLS (SMTPS, port 465)
+	StartTLS bool   `json:"starttls"` // upgrade to TLS after EHLO (port 587)
 }
 
 // Rate is a per-account quota. Day and Month are independent counters so a
@@ -45,11 +47,14 @@ type Webhook struct {
 	Secret string   `json:"secret"`
 }
 
-// Client is a per-client API key and its metadata.
+// Client is a per-client API key and its metadata. AllowedFrom optionally
+// restricts the from addresses the client may send from (empty = any
+// allowlisted account).
 type Client struct {
-	Name  string `json:"name"`
-	Key   string `json:"key"` // generated, stored hashed
-	Note  string `json:"note"`
+	Name        string   `json:"name"`
+	Key         string   `json:"key"` // generated, stored hashed
+	Note        string   `json:"note"`
+	AllowedFrom []string `json:"allowed_from,omitempty"`
 }
 
 // OIDC is the Zitadel integration for human admin access.
@@ -77,14 +82,16 @@ type Config struct {
 }
 
 // Load reads the config from a JSON file at path. If path is empty it looks
-// for a JSON config at $EMAIL_ROUTER_CONFIG. Values may also be supplied via
-// environment variables (EMAIL_ROUTER_*), which override file values.
+// for a JSON config at $SMTP_ROUTER_CONFIG. Values may also be supplied via
+// environment variables (SMTP_ROUTER_*), which override file values.
 func Load(path string) (*Config, error) {
 	cfg := &Config{}
 	if path == "" {
-		path = os.Getenv("EMAIL_ROUTER_CONFIG")
+		path = os.Getenv("SMTP_ROUTER_CONFIG")
 	}
 	if path != "" {
+		// #nosec G703,G304 -- path comes from the -config CLI flag or
+		// SMTP_ROUTER_CONFIG env, not from HTTP input. No untrusted traversal.
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read config: %w", err)
@@ -101,13 +108,13 @@ func Load(path string) (*Config, error) {
 }
 
 func applyEnv(cfg *Config) {
-	if v := os.Getenv("EMAIL_ROUTER_ADMIN_TOKEN"); v != "" {
+	if v := os.Getenv("SMTP_ROUTER_ADMIN_TOKEN"); v != "" {
 		cfg.AdminToken = v
 	}
-	if v := os.Getenv("EMAIL_ROUTER_DEFAULT_DAY"); v != "" {
+	if v := os.Getenv("SMTP_ROUTER_DEFAULT_DAY"); v != "" {
 		cfg.DefaultRate.Day = atoi(v)
 	}
-	if v := os.Getenv("EMAIL_ROUTER_DEFAULT_MONTH"); v != "" {
+	if v := os.Getenv("SMTP_ROUTER_DEFAULT_MONTH"); v != "" {
 		cfg.DefaultRate.Month = atoi(v)
 	}
 }
@@ -129,6 +136,52 @@ func atoi(s string) int {
 		return -n
 	}
 	return n
+}
+
+// Validate checks required configuration. It returns an error when the
+// config is unusable — e.g. no admin token (which would fail-open the admin
+// API), no providers, or no accounts.
+func (c *Config) Validate() error {
+	if c.AdminToken == "" {
+		return fmt.Errorf("admin_token is required: set admin_token (or SMTP_ROUTER_ADMIN_TOKEN) or admin access fails open")
+	}
+	if len(c.Providers) == 0 {
+		return fmt.Errorf("no providers configured")
+	}
+	if len(c.Accounts) == 0 {
+		return fmt.Errorf("no accounts configured")
+	}
+	for _, p := range c.Providers {
+		switch p.Type {
+		case "smtp":
+			if p.Host == "" {
+				return fmt.Errorf("provider %q: smtp host required", p.Name)
+			}
+		case "api":
+			if p.URL == "" {
+				return fmt.Errorf("provider %q: api url required", p.Name)
+			}
+		default:
+			return fmt.Errorf("provider %q: unsupported type %q", p.Name, p.Type)
+		}
+	}
+	return nil
+}
+
+// Save writes the config back to the file at path (used by admin mutations so
+// changes survive restart).
+func (c *Config) Save(path string) error {
+	if path == "" {
+		return fmt.Errorf("no config path to save")
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
 }
 
 // LookupAccount resolves a from address to its account config, returning the

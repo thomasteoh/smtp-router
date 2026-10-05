@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -48,18 +47,18 @@ func (d *Dispatcher) Fire(ctx context.Context, event string, payload map[string]
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Email-Router-Event", event)
+		req.Header.Set("X-Smtp-Router-Event", event)
 		if w.Secret != "" {
 			mac := hmac.New(sha256.New, []byte(w.Secret))
 			mac.Write(b)
-			req.Header.Set("X-Email-Router-Signature", hex.EncodeToString(mac.Sum(nil)))
+			req.Header.Set("X-Smtp-Router-Signature", hex.EncodeToString(mac.Sum(nil)))
 		}
 		resp, err := d.client.Do(req)
 		if err != nil {
 			// best-effort; continue to other endpoints
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 }
 
@@ -77,12 +76,10 @@ func wants(events []string, event string) bool {
 
 // VerifySignature checks an incoming HMAC signature against a secret.
 func VerifySignature(secret, body []byte, sig string) bool {
-	if secret == nil || len(secret) == 0 || sig == "" {
+	if len(secret) == 0 || sig == "" {
 		return false
 	}
 	mac := hmac.New(sha256.New, secret)
 	mac.Write(body)
 	return hmac.Equal([]byte(hex.EncodeToString(mac.Sum(nil))), []byte(sig))
 }
-
-var _ = fmt.Sprintf

@@ -21,7 +21,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: smtp-router <serve|admin> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: smtp-router <serve|admin|health> [flags]")
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
@@ -42,6 +42,17 @@ func main() {
 	case "admin":
 		if err := cli.Admin(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "admin:", err)
+			os.Exit(1)
+		}
+	case "health":
+		fs := flag.NewFlagSet("health", flag.ContinueOnError)
+		dbPath := fs.String("db", "smtp-router.db", "sqlite audit database path")
+		if err := fs.Parse(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if err := cli.Health(*dbPath); err != nil {
+			fmt.Fprintln(os.Stderr, "health:", err)
 			os.Exit(1)
 		}
 	default:

@@ -1,0 +1,14 @@
+# Exclude non-essential files from the container build context.
+.git/
+.gitignore
+.gitattributes
+*.md
+LICENSE
+CONTRIBUTING.md
+SECURITY.md
+Makefile
+compose.yaml
+config.json.example
+*.test
+*.db
+*.out

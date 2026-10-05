@@ -5,7 +5,8 @@
       "type": "smtp",
       "host": "smtp.example.com",
       "port": 587,
-      "auth": "user:password"
+      "auth": "user:password",
+      "starttls": true
     },
     {
       "name": "api-provider",
@@ -33,13 +34,14 @@
     "billing-service": {
       "name": "billing-service",
       "key": "sha256-of-client-key",
-      "note": "generated via admin add-client"
+      "note": "generated via admin add-client",
+      "allowed_from": ["alerts@harmonicr.com"]
     }
   },
   "webhooks": [
     {
       "url": "https://hooks.example.com/email",
-      "events": ["delivered", "rate_limited", "error"],
+      "events": ["delivered", "rate_limited", "denied", "error"],
       "secret": "webhook-hmac-secret"
     }
   ],

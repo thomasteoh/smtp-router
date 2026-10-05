@@ -88,6 +88,11 @@ func hash(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// HashHex returns the hex SHA-256 of a raw key, for storage in config.
+func HashHex(raw string) string {
+	return hash(raw)
+}
+
 // Redact returns a display-safe form of a key (first 8 chars + …), for logs.
 func Redact(key string) string {
 	if len(key) <= 8 {

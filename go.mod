@@ -1,6 +1,8 @@
 module github.com/thomasteoh/smtp-router
 
-go 1.26.0
+// Pin a patch release that fixes known stdlib CVEs (GO-2026-6218, 6090,
+// 6089, 5972, 5026). The Go toolchain directive ensures builds use >= 1.26.6.
+go 1.26.6
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0

@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 )
@@ -103,5 +102,3 @@ func hasRole(c map[string]any, role string) bool {
 	}
 	return false
 }
-
-var _ = time.Second

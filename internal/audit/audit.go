@@ -74,6 +74,8 @@ type Row struct {
 func (s *Store) List(n int) ([]Row, error) {
 	q := "SELECT id, ts, client, from_addr, provider, status, error, request_id FROM audit ORDER BY id DESC"
 	if n > 0 {
+		// #nosec G202 -- n is an int formatted with %d (no string interpolation),
+		// so no SQL injection is possible.
 		q += fmt.Sprintf(" LIMIT %d", n)
 	}
 	rows, err := s.db.Query(q)

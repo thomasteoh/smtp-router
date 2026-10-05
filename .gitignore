@@ -2,7 +2,7 @@
 *.exe
 *.test
 *.out
-email-router
+/email-router
 coverage.out
 
 # Runtime artifacts

@@ -1,0 +1,16 @@
+# Go
+*.exe
+*.test
+*.out
+email-router
+coverage.out
+
+# Runtime artifacts
+*.db
+*.db-shm
+*.db-wal
+config.local.json
+
+# Secrets
+.env
+*.env

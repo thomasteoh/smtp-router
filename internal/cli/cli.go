@@ -1,0 +1,187 @@
+// Package cli implements the email-router command-line interface: `serve`
+// and `admin` subcommands. Admin operations mirror the HTTP admin API.
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/harmonicr/email-router/internal/auth"
+	"github.com/harmonicr/email-router/internal/audit"
+	"github.com/harmonicr/email-router/internal/config"
+	"github.com/harmonicr/email-router/internal/oidc"
+	"github.com/harmonicr/email-router/internal/ratelimit"
+	"github.com/harmonicr/email-router/internal/rules"
+	"github.com/harmonicr/email-router/internal/server"
+	"github.com/harmonicr/email-router/internal/webhook"
+)
+
+// Serve runs the HTTP API server.
+func Serve(cfgPath, addr, dbPath string) error {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	cfg.Normalize()
+
+	// Wire audit.
+	ad, err := audit.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer ad.Close()
+
+	// Wire auth: load clients from config (keys are already hashed in config,
+	// but the config stores raw — treat as secret and hash at load).
+	au := auth.New()
+	for name, c := range cfg.Clients {
+		au.Add(name, c.Key)
+	}
+
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	hk := webhook.New(cfg.Webhooks)
+
+	// OIDC verifier (admin access), if configured.
+	var ov *oidc.Verifier
+	if cfg.OIDC != nil {
+		ov = oidc.New(oidc.Config{
+			Issuer:      cfg.OIDC.Issuer,
+			ClientID:    cfg.OIDC.ClientID,
+			Scopes:      cfg.OIDC.Scopes,
+			AdminRole:   cfg.OIDC.AdminRole,
+			RedirectURL: cfg.OIDC.RedirectURL,
+		})
+	}
+
+	s, err := server.New(cfg, au, ad, lim, rl, hk, ov)
+	if err != nil {
+		return err
+	}
+
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      s.Handler(),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+	}
+	fmt.Printf("email-router listening on %s (db %s)\n", addr, dbPath)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+// Admin runs an admin subcommand.
+func Admin(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: email-router admin <subcommand> [args]")
+	}
+	sub := args[0]
+	switch sub {
+	case "add-client":
+		return adminAddClient(args[1:])
+	case "list-clients":
+		return adminListClients(args[1:])
+	case "usage":
+		return adminUsage(args[1:])
+	case "list-audit":
+		return adminListAudit(args[1:])
+	default:
+		return fmt.Errorf("unknown admin subcommand %q", sub)
+	}
+}
+
+func adminAddClient(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: email-router admin add-client <name>")
+	}
+	name := args[0]
+	au := auth.New()
+	key, err := au.Generate(name)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("client=%s key=%s\n", name, key)
+	return nil
+}
+
+func adminListClients(args []string) error {
+	// In this minimal CLI we read clients from config and print names.
+	cfgPath := firstNonEmpty(args, "")
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	for name := range cfg.Clients {
+		fmt.Println(name)
+	}
+	return nil
+}
+
+func adminUsage(args []string) error {
+	// Read the audit store and print per-account counts for the current
+	// windows (day + month) from the limiter state. In this minimal CLI we
+	// report audit counts by status.
+	dbPath := firstNonEmpty(args, "email-router.db")
+	ad, err := audit.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer ad.Close()
+	rows, err := ad.List(0)
+	if err != nil {
+		return err
+	}
+	byStatus := map[string]int{}
+	byFrom := map[string]int{}
+	for _, r := range rows {
+		byStatus[r.Status]++
+		byFrom[r.From]++
+	}
+	fmt.Println("by status:")
+	for k, v := range byStatus {
+		fmt.Printf("  %-12s %d\n", k, v)
+	}
+	fmt.Println("by account:")
+	for k, v := range byFrom {
+		fmt.Printf("  %-24s %d\n", k, v)
+	}
+	return nil
+}
+
+func adminListAudit(args []string) error {
+	dbPath := firstNonEmpty(args, "email-router.db")
+	ad, err := audit.Open(dbPath)
+	if err != nil {
+		return err
+	}
+	defer ad.Close()
+	rows, err := ad.List(50)
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		fmt.Printf("%s %-10s %-20s %-12s %s\n", r.TS, r.Client, r.From, r.Status, r.Provider)
+	}
+	return nil
+}
+
+func firstNonEmpty(args []string, def string) string {
+	for _, a := range args {
+		if a != "" {
+			return a
+		}
+	}
+	return def
+}
+
+var _ = context.Background
+var _ = json.Marshal
+var _ = strings.TrimSpace
+var _ = os.Exit

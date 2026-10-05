@@ -1,0 +1,27 @@
+# harmonicr email-router — rootless Podman compose for the solo VM.
+# Runs under the deploy user, host networking, Caddy fronts smtp.harmonicr.com.
+services:
+  email-router:
+    image: ghcr.io/harmonicr/email-router:latest
+    container_name: email-router
+    restart: unless-stopped
+    network_mode: host
+    command: ["serve", "-config", "/opt/email-router/config.json", "-addr", ":8080", "-db", "/opt/email-router-data/email-router.db"]
+    environment:
+      EMAIL_ROUTER_ADMIN_TOKEN: ${EMAIL_ROUTER_ADMIN_TOKEN}
+      EMAIL_ROUTER_DEFAULT_DAY: ${EMAIL_ROUTER_DEFAULT_DAY}
+      EMAIL_ROUTER_DEFAULT_MONTH: ${EMAIL_ROUTER_DEFAULT_MONTH}
+    volumes:
+      - /opt/email-router:/opt/email-router:ro
+      - email-router-data:/opt/email-router-data
+    ports:
+      # Caddy terminates TLS at smtp.harmonicr.com and proxies here.
+      - "52150:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  email-router-data:

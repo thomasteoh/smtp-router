@@ -1,0 +1,56 @@
+{
+  "providers": [
+    {
+      "name": "smtp-harmonicr",
+      "type": "smtp",
+      "host": "smtp.example.com",
+      "port": 587,
+      "auth": "user:password"
+    },
+    {
+      "name": "api-provider",
+      "type": "api",
+      "url": "https://api.example.com/send",
+      "token": "provider-api-token",
+      "method": "POST"
+    }
+  ],
+  "accounts": {
+    "alerts@harmonicr.com": {
+      "from": "alerts@harmonicr.com",
+      "provider": "smtp-harmonicr",
+      "rate": { "day": 200, "month": 2000 }
+    },
+    "noreply@harmonicr.com": {
+      "from": "noreply@harmonicr.com",
+      "provider": "api-provider",
+      "rate": { "day": 100, "month": 500 }
+    }
+  },
+  "allowlist": ["*@harmonicr.com"],
+  "denylist": ["spam@harmonicr.com"],
+  "clients": {
+    "billing-service": {
+      "name": "billing-service",
+      "key": "sha256-of-client-key",
+      "note": "generated via admin add-client"
+    }
+  },
+  "webhooks": [
+    {
+      "url": "https://hooks.example.com/email",
+      "events": ["delivered", "rate_limited", "error"],
+      "secret": "webhook-hmac-secret"
+    }
+  ],
+  "oidc": {
+    "issuer": "https://auth.harmonicr.com",
+    "client_id": "email-router-oidc-client",
+    "client_secret": "oidc-client-secret",
+    "scopes": ["openid", "profile"],
+    "admin_role": "mail-admin",
+    "redirect_url": "https://smtp.harmonicr.com/callback"
+  },
+  "admin_token": "admin-bearer-token",
+  "default_rate": { "day": 200, "month": 2000 }
+}

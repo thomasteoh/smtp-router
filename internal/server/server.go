@@ -80,9 +80,17 @@ func (s *Server) Handler() http.Handler {
 
 	// Admin endpoints (token/OIDC-gated).
 	mux.HandleFunc("POST /admin/providers", s.gateAdmin(s.adminAddProvider))
+	mux.HandleFunc("GET /admin/providers", s.gateAdmin(s.adminListProviders))
+	mux.HandleFunc("DELETE /admin/providers/{name}", s.gateAdmin(s.adminDeleteProvider))
 	mux.HandleFunc("POST /admin/accounts", s.gateAdmin(s.adminAddAccount))
+	mux.HandleFunc("GET /admin/accounts", s.gateAdmin(s.adminListAccounts))
+	mux.HandleFunc("DELETE /admin/accounts/{from}", s.gateAdmin(s.adminDeleteAccount))
 	mux.HandleFunc("POST /admin/clients", s.gateAdmin(s.adminAddClient))
+	mux.HandleFunc("GET /admin/clients", s.gateAdmin(s.adminListClients))
+	mux.HandleFunc("DELETE /admin/clients/{name}", s.gateAdmin(s.adminDeleteClient))
 	mux.HandleFunc("POST /admin/rules", s.gateAdmin(s.adminAddRule))
+	mux.HandleFunc("GET /admin/rules", s.gateAdmin(s.adminListRules))
+	mux.HandleFunc("DELETE /admin/rules", s.gateAdmin(s.adminDeleteRule))
 	mux.HandleFunc("GET /admin/audit", s.gateAdmin(s.adminListAudit))
 	mux.HandleFunc("GET /admin/usage", s.gateAdmin(s.adminUsage))
 
@@ -470,6 +478,139 @@ func (s *Server) adminAddRule(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	s.persistConfig()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "action": req.Action, "rule": req.Rule})
+}
+
+// adminListProviders lists the configured providers (admin).
+func (s *Server) adminListProviders(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	out := make([]map[string]any, 0, len(s.cfg.Providers))
+	for _, p := range s.cfg.Providers {
+		out = append(out, map[string]any{
+			"name": p.Name, "type": p.Type, "host": p.Host, "port": p.Port,
+			"url": p.URL, "method": p.Method, "tls": p.TLS, "starttls": p.StartTLS,
+		})
+	}
+	s.mu.RUnlock()
+	writeJSON(w, http.StatusOK, out)
+}
+
+// adminDeleteProvider removes a provider by name (admin) and persists.
+func (s *Server) adminDeleteProvider(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.mu.Lock()
+	for i := range s.cfg.Providers {
+		if s.cfg.Providers[i].Name == name {
+			s.cfg.Providers = append(s.cfg.Providers[:i], s.cfg.Providers[i+1:]...)
+			delete(s.prov, name)
+			s.mu.Unlock()
+			s.persistConfig()
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "provider": name})
+			return
+		}
+	}
+	s.mu.Unlock()
+	http.Error(w, "provider not found", http.StatusNotFound)
+}
+
+// adminListAccounts lists the configured accounts (admin).
+func (s *Server) adminListAccounts(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	out := make([]map[string]any, 0, len(s.cfg.Accounts))
+	for from, a := range s.cfg.Accounts {
+		out = append(out, map[string]any{
+			"from": from, "provider": a.Provider,
+			"rate": map[string]int{"day": a.Rate.Day, "month": a.Rate.Month},
+		})
+	}
+	s.mu.RUnlock()
+	writeJSON(w, http.StatusOK, out)
+}
+
+// adminDeleteAccount removes an account by from address (admin) and persists.
+func (s *Server) adminDeleteAccount(w http.ResponseWriter, r *http.Request) {
+	from := r.PathValue("from")
+	s.mu.Lock()
+	if _, ok := s.cfg.Accounts[from]; !ok {
+		s.mu.Unlock()
+		http.Error(w, "account not found", http.StatusNotFound)
+		return
+	}
+	delete(s.cfg.Accounts, from)
+	s.mu.Unlock()
+	s.persistConfig()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "account": from})
+}
+
+// adminListClients lists clients by name (admin). Keys are never returned.
+func (s *Server) adminListClients(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	out := make([]map[string]any, 0, len(s.cfg.Clients))
+	for name, c := range s.cfg.Clients {
+		out = append(out, map[string]any{"name": name, "note": c.Note, "allowed_from": c.AllowedFrom})
+	}
+	s.mu.RUnlock()
+	writeJSON(w, http.StatusOK, out)
+}
+
+// adminDeleteClient removes a client by name (admin) and persists.
+func (s *Server) adminDeleteClient(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.mu.Lock()
+	if _, ok := s.cfg.Clients[name]; !ok {
+		s.mu.Unlock()
+		http.Error(w, "client not found", http.StatusNotFound)
+		return
+	}
+	delete(s.cfg.Clients, name)
+	s.mu.Unlock()
+	s.persistConfig()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "client": name})
+}
+
+// adminListRules lists the allowlist and denylist (admin).
+func (s *Server) adminListRules(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	allow := append([]string(nil), s.cfg.Allowlist...)
+	deny := append([]string(nil), s.cfg.Denylist...)
+	s.mu.RUnlock()
+	writeJSON(w, http.StatusOK, map[string]any{"allow": allow, "deny": deny})
+}
+
+// adminDeleteRule removes an allowlist or denylist entry (admin) and persists.
+func (s *Server) adminDeleteRule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Action string `json:"action"` // "allow" or "deny"
+		Rule   string `json:"rule"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if req.Rule == "" || (req.Action != "allow" && req.Action != "deny") {
+		http.Error(w, "action (allow|deny) and rule required", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	switch req.Action {
+	case "allow":
+		s.cfg.Allowlist = removeStr(s.cfg.Allowlist, req.Rule)
+	case "deny":
+		s.cfg.Denylist = removeStr(s.cfg.Denylist, req.Rule)
+	}
+	s.mu.Unlock()
+	s.persistConfig()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "action": req.Action, "rule": req.Rule})
+}
+
+// removeStr removes every occurrence of v from a slice.
+func removeStr(in []string, v string) []string {
+	out := in[:0]
+	for _, s := range in {
+		if s != v {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // persistConfig saves the in-memory config to disk when a path is set.

@@ -98,8 +98,10 @@ service). Visit `https://smtp.harmonicr.com/portal`:
   admin API using the session's ID token as a Bearer credential.
 - `GET /logout` clears the session.
 
-The console manages providers, accounts, clients (API keys), allow/deny rules,
-and shows audit + usage. The OIDC app must have role assertions enabled (the
+The web UI lives at the repo root in `web/` (`web/web.go` embeds
+`web/index.html`; the portal package imports `web` and serves it). The console
+manages providers, accounts, clients (API keys), allow/deny rules, and shows
+audit + usage. The OIDC app must have role assertions enabled (the
 `admin` role key must ride the ID token) and the user must hold the `admin`
 role on the internal project.
 

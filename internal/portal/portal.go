@@ -7,7 +7,6 @@ package portal
 import (
 	"context"
 	"crypto/rand"
-	"embed"
 	"encoding/base64"
 	"fmt"
 	"html/template"
@@ -16,11 +15,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/thomasteoh/smtp-router/web"
 	"golang.org/x/oauth2"
 )
-
-//go:embed index.html
-var indexFS embed.FS
 
 // Config carries the OIDC settings needed to drive the login flow.
 type Config struct {
@@ -133,7 +130,7 @@ func (p *Portal) handlePortal(w http.ResponseWriter, r *http.Request) {
 		Roles:   sess.roles,
 		IDToken: sess.idToken,
 	}
-	page := template.Must(template.New("index").ParseFS(indexFS, "index.html"))
+	page := template.Must(template.New("index").Parse(string(web.IndexHTML())))
 	if err := page.ExecuteTemplate(w, "index", data); err != nil {
 		log.Printf("portal render: %v", err)
 	}

@@ -228,6 +228,85 @@ func TestPortalRouteRegistered(t *testing.T) {
 	}
 }
 
+func TestAdminListAndDelete(t *testing.T) {
+	cfg := &config.Config{
+		AdminToken: "tok",
+		Providers:  []config.Provider{{Name: "smtp", Type: "smtp", Host: "h"}},
+		Accounts:   map[string]config.Account{"a@h.com": {From: "a@h.com", Provider: "smtp"}},
+		Clients:    map[string]config.Client{"c1": {Name: "c1", Note: "n"}},
+		Allowlist:  []string{"*@h.com"},
+	}
+	au := auth.New()
+	ad, _ := audit.Open(":memory:")
+	defer ad.Close()
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	s, _ := New(cfg, au, ad, lim, rl, webhook.New(nil), &oidc.Verifier{})
+	s.SetConfigPath(t.TempDir() + "/cfg.json")
+	h := s.Handler()
+
+	// List providers
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/admin/providers", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("list providers status = %d", rec.Code)
+	}
+
+	// Delete provider
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("DELETE", "/admin/providers/smtp", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("delete provider status = %d", rec.Code)
+	}
+	// Verify it's gone
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/admin/providers", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "[]") {
+		t.Fatalf("provider still listed: %s", rec.Body.String())
+	}
+
+	// List accounts
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/admin/accounts", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "a@h.com") {
+		t.Fatalf("list accounts: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Delete account (from in path)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("DELETE", "/admin/accounts/a@h.com", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("delete account status = %d", rec.Code)
+	}
+
+	// List rules
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/admin/rules", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "*@h.com") {
+		t.Fatalf("list rules: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Unauthorized without token
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/admin/providers", nil)
+	h.ServeHTTP(rec, req)
+	if rec.Code != 401 {
+		t.Fatalf("unauthorized status = %d", rec.Code)
+	}
+}
+
 func TestSendUnauthorized(t *testing.T) {
 	cfg := &config.Config{Allowlist: []string{"*@harmonicr.com"}}
 	au := auth.New()

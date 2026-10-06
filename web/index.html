@@ -1,0 +1,230 @@
+{{define "index"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smtp-router admin</title>
+<style>
+:root { color-scheme: light dark; --border: #d0d5dc; --muted: #5b6672; --ok-bg: #e8f5e9; --ok: #2e7d32; --err-bg: #fdecea; --err: #c62828; }
+* { box-sizing: border-box; }
+body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem; background: var(--bg, #fafafa); }
+header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+h1 { font-size: 1.4rem; margin: 0; }
+nav a { margin-right: 0.75rem; color: var(--muted); }
+main { max-width: 62rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
+.card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem; background: var(--card-bg, #fff); }
+.card h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
+.card h3 { margin: 0.75rem 0 0.5rem; font-size: 0.95rem; }
+label { display: block; margin: 0.5rem 0 0.15rem; font-weight: 600; }
+input, select, textarea { padding: 0.4rem 0.5rem; border: 1px solid var(--border); border-radius: 5px; width: min(24rem, 100%); }
+button { padding: 0.45rem 0.9rem; border-radius: 5px; border: 1px solid var(--border); background: var(--bg, #f6f6f6); cursor: pointer; }
+button:hover { background: var(--hover, #ececec); }
+button.danger { background: var(--err-bg); color: var(--err); }
+.row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
+table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+th { font-size: 0.85rem; text-transform: uppercase; color: var(--muted); }
+pre { background: var(--bg, #f6f6f6); padding: 0.6rem; border-radius: 5px; overflow-x: auto; }
+.msg { padding: 0.5rem 0.75rem; border-radius: 5px; margin: 0.5rem 0; display: none; }
+.msg.ok { display: block; background: var(--ok-bg); color: var(--ok); }
+.msg.err { display: block; background: var(--err-bg); color: var(--err); }
+.clip { font-family: monospace; word-break: break-all; }
+.empty { color: var(--muted); font-style: italic; }
+.badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.8rem; background: var(--bg, #eee); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>smtp-router admin</h1>
+    <small>signed in as <strong>{{.Email}}</strong> ({{.Name}})</small>
+  </div>
+  <nav><a href="/portal">reload</a> <a href="/logout">logout</a></nav>
+</header>
+<main>
+  <div id="msg" class="msg"></div>
+
+  <section class="card">
+    <h2>Status</h2>
+    <div class="row"><button onclick="loadAll()">refresh</button><span id="statusOut"></span></div>
+    <h3>Usage by account</h3>
+    <table id="usageTable"><thead><tr><th>account</th><th>day</th><th>month</th></tr></thead><tbody></tbody></table>
+    <h3>Rules</h3>
+    <div class="row">
+      <label>allow <span id="allowCount" class="badge"></span></label>
+      <label>deny <span id="denyCount" class="badge"></span></label>
+    </div>
+    <table id="rulesTable"><thead><tr><th>action</th><th>rule</th><th></th></tr></thead><tbody></tbody></table>
+    <h3>Add rule</h3>
+    <div class="row">
+      <label>action <select id="rAction"><option value="allow">allow</option><option value="deny">deny</option></select></label>
+      <label>rule <input id="rRule" placeholder="*@harmonicr.com"></label>
+    </div>
+    <button onclick="addRule()">Add rule</button>
+  </section>
+
+  <section class="card">
+    <h2>Providers</h2>
+    <table id="provTable"><thead><tr><th>name</th><th>type</th><th>host/url</th><th>port</th><th>tls</th><th></th></tr></thead><tbody></tbody></table>
+    <h3>Add provider</h3>
+    <div class="row">
+      <label>name <input id="pName" placeholder="smtp"></label>
+      <label>type <select id="pType"><option value="smtp">smtp</option><option value="api">api</option></select></label>
+      <label>host <input id="pHost" placeholder="smtp.gmail.com"></label>
+      <label>port <input id="pPort" type="number" placeholder="465"></label>
+    </div>
+    <div class="row">
+      <label>auth <input id="pAuth" placeholder="user:pass or token"></label>
+      <label>url <input id="pUrl" placeholder="https://api/..."></label>
+      <label>tls <input id="pTls" type="checkbox"></label>
+      <label>starttls <input id="pStartTls" type="checkbox"></label>
+    </div>
+    <button onclick="addProvider()">Add provider</button>
+  </section>
+
+  <section class="card">
+    <h2>Accounts</h2>
+    <table id="acctTable"><thead><tr><th>from</th><th>provider</th><th>day</th><th>month</th><th></th></tr></thead><tbody></tbody></table>
+    <h3>Add account</h3>
+    <div class="row">
+      <label>from <input id="aFrom" placeholder="noreply@harmonicr.com"></label>
+      <label>provider <input id="aProvider" placeholder="smtp"></label>
+      <label>day limit <input id="aDay" type="number" placeholder="200"></label>
+      <label>month limit <input id="aMonth" type="number" placeholder="2000"></label>
+    </div>
+    <button onclick="addAccount()">Add account</button>
+  </section>
+
+  <section class="card">
+    <h2>Clients (API keys)</h2>
+    <table id="clientTable"><thead><tr><th>name</th><th>note</th><th>allowed_from</th><th></th></tr></thead><tbody></tbody></table>
+    <h3>Add client</h3>
+    <div class="row">
+      <label>name <input id="cName" placeholder="my-app"></label>
+      <label>note <input id="cNote" placeholder="optional"></label>
+    </div>
+    <button onclick="addClient()">Add client</button>
+    <pre id="clientOut" class="clip"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Audit</h2>
+    <div class="row"><button onclick="loadAudit()">refresh</button><span id="auditOut"></span></div>
+    <table id="auditTable"><thead><tr><th>time</th><th>client</th><th>from</th><th>status</th><th>provider</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<script>
+const ID = {{printf "%q" .IDToken}};
+function msg(txt, ok) {
+  const el = document.getElementById('msg');
+  el.className = 'msg ' + (ok ? 'ok' : 'err');
+  el.textContent = txt;
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function cell(v) { const td = document.createElement('td'); td.textContent = v ?? ''; return td; }
+function delBtn(path, name, cb) {
+  const b = document.createElement('button'); b.className = 'danger'; b.textContent = 'remove';
+  b.onclick = async () => { try { await api(path, null, 'DELETE'); msg(name + ' removed', true); cb(); } catch (e) { msg(e.message, false); } };
+  return b;
+}
+async function api(path, body, method) {
+  const opts = { headers: { 'Authorization': 'Bearer ' + ID } };
+  if (method) opts.method = method;
+  if (body) { opts.method = 'POST'; opts.body = JSON.stringify(body); }
+  const r = await fetch(path, opts);
+  const t = await r.text();
+  if (!r.ok) { throw new Error(r.status + ': ' + (t || 'error')); }
+  try { return JSON.parse(t); } catch { return t; }
+}
+async function loadUsage() {
+  const tb = document.getElementById('usageTable').querySelector('tbody');
+  tb.innerHTML = '';
+  const usage = await api('/admin/usage');
+  for (const [acct, v] of Object.entries(usage)) {
+    const tr = document.createElement('tr');
+    tr.append(cell(acct), cell(v.day), cell(v.month));
+    tb.appendChild(tr);
+  }
+}
+async function loadRules() {
+  const r = await api('/admin/rules');
+  document.getElementById('allowCount').textContent = r.allow.length + ' allow';
+  document.getElementById('denyCount').textContent = r.deny.length + ' deny';
+  const tb = document.getElementById('rulesTable').querySelector('tbody');
+  tb.innerHTML = '';
+  for (const rule of r.allow) { const tr = document.createElement('tr'); tr.append(cell('allow'), cell(rule), delBtn('/admin/rules', rule, loadRules)); tb.appendChild(tr); }
+  for (const rule of r.deny) { const tr = document.createElement('tr'); tr.append(cell('deny'), cell(rule), delBtn('/admin/rules', rule, loadRules)); tb.appendChild(tr); }
+}
+async function loadProviders() {
+  const tb = document.getElementById('provTable').querySelector('tbody');
+  tb.innerHTML = '';
+  const provs = await api('/admin/providers');
+  for (const p of provs) {
+    const tr = document.createElement('tr');
+    tr.append(cell(p.name), cell(p.type), cell(p.type === 'api' ? p.url : p.host), cell(p.port), cell(p.tls || p.starttls ? 'TLS' : ''));
+    tr.appendChild(delBtn('/admin/providers/' + encodeURIComponent(p.name), p.name, loadProviders));
+    tb.appendChild(tr);
+  }
+}
+async function loadAccounts() {
+  const tb = document.getElementById('acctTable').querySelector('tbody');
+  tb.innerHTML = '';
+  const accts = await api('/admin/accounts');
+  for (const a of accts) {
+    const tr = document.createElement('tr');
+    tr.append(cell(a.from), cell(a.provider), cell(a.rate.day), cell(a.rate.month));
+    tr.appendChild(delBtn('/admin/accounts/' + encodeURIComponent(a.from), a.from, loadAccounts));
+    tb.appendChild(tr);
+  }
+}
+async function loadClients() {
+  const tb = document.getElementById('clientTable').querySelector('tbody');
+  tb.innerHTML = '';
+  const cs = await api('/admin/clients');
+  for (const c of cs) {
+    const tr = document.createElement('tr');
+    tr.append(cell(c.name), cell(c.note), cell((c.allowed_from || []).join(', ')));
+    tr.appendChild(delBtn('/admin/clients/' + encodeURIComponent(c.name), c.name, loadClients));
+    tb.appendChild(tr);
+  }
+}
+async function loadAudit() {
+  const out = document.getElementById('auditOut');
+  out.textContent = 'loading...';
+  try {
+    const rows = await api('/admin/audit?n=50');
+    const tb = document.getElementById('auditTable').querySelector('tbody');
+    tb.innerHTML = '';
+    for (const r of rows) { const tr = document.createElement('tr'); tr.append(cell(r.ts||r.TS||''), cell(r.client||''), cell(r.from||''), cell(r.status||''), cell(r.provider||'')); tb.appendChild(tr); }
+    out.textContent = 'ok';
+  } catch (e) { out.textContent = e.message; }
+}
+async function loadAll() {
+  const out = document.getElementById('statusOut');
+  out.textContent = 'loading...';
+  try { await Promise.all([loadUsage(), loadRules(), loadProviders(), loadAccounts(), loadClients(), loadAudit()]); out.textContent = 'ok'; }
+  catch (e) { out.textContent = e.message; }
+}
+async function addProvider() {
+  const b = { name: document.getElementById('pName').value.trim(), type: document.getElementById('pType').value, host: document.getElementById('pHost').value.trim(), port: +document.getElementById('pPort').value || 0, auth: document.getElementById('pAuth').value, url: document.getElementById('pUrl').value.trim(), tls: document.getElementById('pTls').checked, starttls: document.getElementById('pStartTls').checked };
+  try { await api('/admin/providers', b); msg('provider added: ' + b.name, true); loadProviders(); } catch (e) { msg(e.message, false); }
+}
+async function addAccount() {
+  const b = { from: document.getElementById('aFrom').value.trim(), provider: document.getElementById('aProvider').value.trim(), rate: { day: +document.getElementById('aDay').value || 0, month: +document.getElementById('aMonth').value || 0 } };
+  try { await api('/admin/accounts', b); msg('account added: ' + b.from, true); loadAccounts(); } catch (e) { msg(e.message, false); }
+}
+async function addClient() {
+  const b = { name: document.getElementById('cName').value.trim(), note: document.getElementById('cNote').value.trim() };
+  try { const r = await api('/admin/clients', b); document.getElementById('clientOut').textContent = 'client=' + r.client + ' key=' + r.key; msg('client added: ' + r.client, true); loadClients(); } catch (e) { msg(e.message, false); }
+}
+async function addRule() {
+  const b = { action: document.getElementById('rAction').value, rule: document.getElementById('rRule').value.trim() };
+  try { await api('/admin/rules', b); msg('rule added (' + b.action + '): ' + b.rule, true); loadRules(); } catch (e) { msg(e.message, false); }
+}
+loadAll();
+</script>
+</body>
+</html>
+{{end}}

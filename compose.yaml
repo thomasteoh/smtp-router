@@ -6,17 +6,21 @@ services:
     container_name: smtp-router
     restart: unless-stopped
     network_mode: host
-    command: ["serve", "-config", "/opt/smtp-router/config.json", "-addr", ":8080", "-db", "/opt/smtp-router-data/smtp-router.db"]
+    userns_mode: keep-id:uid=10001,gid=10001
+    command: ["serve", "-config", "/opt/smtp-router/config.json", "-addr", ":52150", "-db", "/opt/smtp-router-data/smtp-router.db"]
     environment:
       SMTP_ROUTER_ADMIN_TOKEN: ${SMTP_ROUTER_ADMIN_TOKEN}
       SMTP_ROUTER_DEFAULT_DAY: ${SMTP_ROUTER_DEFAULT_DAY}
       SMTP_ROUTER_DEFAULT_MONTH: ${SMTP_ROUTER_DEFAULT_MONTH}
     volumes:
-      - /opt/smtp-router:/opt/smtp-router:ro
+      # Config dir is writable so admin mutations (add-provider/account/client,
+      # add-rule) can persist via Config.Save back to config.json.
+      - /opt/smtp-router:/opt/smtp-router:rw
       - smtp-router-data:/opt/smtp-router-data
     ports:
-      # Caddy terminates TLS at smtp.harmonicr.com and proxies here.
-      - "52150:8080"
+      # Under host networking, ports is ignored; the router binds :52150 on the
+      # host. Caddy terminates TLS at smtp.harmonicr.com and proxies here.
+      - "52150:52150"
     healthcheck:
       # The runtime is scratch (no shell/wget), so exec the binary's health
       # subcommand directly against the mounted DB.

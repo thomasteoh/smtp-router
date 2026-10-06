@@ -106,6 +106,34 @@ audit + usage. The OIDC app must have role assertions enabled (the
 `admin` role key must ride the ID token) and the user must hold the `admin`
 role on the internal project.
 
+## Async send queue
+
+When `queue.enabled` is true, `POST /send` becomes asynchronous: instead of
+delivering synchronously, the router enqueues the send and returns
+`202 accepted` with a `job_id`. A worker pool drains the queue, applying
+per-account rate limits at delivery time so a burst is paced rather than
+rejected outright. When disabled (default), sends stay synchronous.
+
+Useful features:
+
+- **Scheduling** — `send_at` (RFC3339) defers a send; jobs are not claimed
+  before their due time.
+- **Prioritisation** — `priority` (higher = more urgent) drains first; FIFO
+  within the same priority.
+- **Retry with backoff** — transient delivery failures are retried up to
+  `max_retries`; after that the job moves to `dead`. A rate-limited delivery
+  re-queues without counting an attempt.
+- **Crash recovery** — jobs left `running` by a killed process are re-queued
+  on startup.
+- **Admin API** (token-gated) — `GET /admin/queue` (depth + counters),
+  `GET /admin/queue/jobs` (list, optional `?status=`), and
+  `DELETE /admin/queue/jobs/{id}` (cancel a queued job).
+
+The queue DB defaults to `<audit-db>.queue` alongside the audit database.
+See `config.json.example` for the `queue` block. Note: an account still maps
+to a single provider — cross-provider allocation (round-robin / tier-based /
+proportional) is not implemented.
+
 ## Config
 
 See `config.json.example` for the full shape: providers (smtp|api), accounts

@@ -245,6 +245,7 @@ func (p *Portal) handleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
 	http.Redirect(w, r, "/login", http.StatusFound)

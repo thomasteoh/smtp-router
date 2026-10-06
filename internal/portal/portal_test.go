@@ -35,7 +35,7 @@ func newTestPortal() *Portal {
 func TestPortalRedirectsWithoutSession(t *testing.T) {
 	p := newTestPortal()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/portal", nil)
+	req := httptest.NewRequest("GET", "/", nil)
 	p.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302", rec.Code)
@@ -106,8 +106,8 @@ func TestCallbackWithAdminSession(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302", rec.Code)
 	}
-	if got := rec.Header().Get("Location"); got != "/portal" {
-		t.Fatalf("location = %q, want /portal", got)
+	if got := rec.Header().Get("Location"); got != "/" {
+		t.Fatalf("location = %q, want /", got)
 	}
 	cookies := rec.Result().Cookies()
 	if len(cookies) == 0 || cookies[0].Name != "smtp_router_sess" {

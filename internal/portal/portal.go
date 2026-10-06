@@ -88,7 +88,7 @@ func New(cfg Config, verifier Verifier) *Portal {
 // Handler returns the portal HTTP handler.
 func (p *Portal) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /portal", p.handlePortal)
+	mux.HandleFunc("GET /{$}", p.handlePortal)
 	mux.HandleFunc("GET /login", p.handleLogin)
 	mux.HandleFunc("GET /callback", p.handleCallback)
 	mux.HandleFunc("GET /logout", p.handleLogout)
@@ -97,14 +97,14 @@ func (p *Portal) Handler() http.Handler {
 
 // Register adds the portal's routes to an existing ServeMux.
 func (p *Portal) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /portal", p.handlePortal)
+	mux.HandleFunc("GET /{$}", p.handlePortal)
 	mux.HandleFunc("GET /login", p.handleLogin)
 	mux.HandleFunc("GET /callback", p.handleCallback)
 	mux.HandleFunc("GET /logout", p.handleLogout)
 }
 
-// handlePortal serves the admin console, or redirects to /login when no valid
-// session cookie is present.
+// handlePortal serves the admin console at the site root, or redirects to
+// /login when no valid session cookie is present.
 func (p *Portal) handlePortal(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("smtp_router_sess")
 	if err != nil {
@@ -226,7 +226,7 @@ func (p *Portal) handleCallback(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   12 * 3600,
 	})
-	http.Redirect(w, r, "/portal", http.StatusFound)
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 // handleLogout clears the session cookie and drops the stored session.

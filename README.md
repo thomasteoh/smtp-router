@@ -88,14 +88,15 @@ role-gated. See `config.json.example`.
 ### Admin web portal
 
 The router also serves an OIDC Connect admin web console (no separate
-service). Visit `https://smtp.harmonicr.com/portal`:
+service) at the site root. Visit `https://smtp.harmonicr.com/`:
 
+- `GET /` renders the embedded HTML console (redirects to `/login` when no
+  session), which calls the token-gated admin API using the session's ID token
+  as a Bearer credential.
 - `GET /login` redirects to Zitadel authorize (OIDC authorization-code flow).
 - `GET /callback` exchanges the code, verifies the ID token via the router's
   OIDC verifier, checks the `admin` role, and sets a session cookie
   (`smtp_router_sess`, HttpOnly/Secure, 12h).
-- `GET /portal` renders the embedded HTML console, which calls the token-gated
-  admin API using the session's ID token as a Bearer credential.
 - `GET /logout` clears the session.
 
 The web UI lives at the repo root in `web/` (`web/web.go` embeds

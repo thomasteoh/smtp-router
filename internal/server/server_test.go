@@ -218,7 +218,7 @@ func TestPortalRouteRegistered(t *testing.T) {
 	}, &oidc.Verifier{}))
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/portal", nil)
+	req := httptest.NewRequest("GET", "/", nil)
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != 302 {
 		t.Fatalf("status = %d, want 302 redirect to login", rec.Code)

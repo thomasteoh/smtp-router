@@ -5,34 +5,68 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>smtp-router admin</title>
+<script>
+// Apply saved/manual theme before first paint to avoid a flash of the wrong theme.
+(function () {
+  var saved = null;
+  try { saved = localStorage.getItem('smtp-router-theme'); } catch (e) {}
+  var dark = saved === 'dark' || (saved !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (dark) document.documentElement.classList.add('dark');
+  else document.documentElement.classList.add('light');
+})();
+</script>
 <style>
-:root { color-scheme: light dark; --border: #d0d5dc; --muted: #5b6672; --ok-bg: #e8f5e9; --ok: #2e7d32; --err-bg: #fdecea; --err: #c62828; }
+/* Light theme (default) */
+:root {
+  color-scheme: light dark;
+  --bg: #fafafa;
+  --card-bg: #ffffff;
+  --text: #1a2027;
+  --muted: #4b5563;
+  --border: #c7cdd5;
+  --hover: #e6e8eb;
+  --ok: #1f7a2e;
+  --ok-bg: #d9f2dd;
+  --err: #b3261e;
+  --err-bg: #fbe3e1;
+}
+/* Dark theme: auto via prefers-color-scheme (only when no manual choice), manual via .dark on <html> */
+@media (prefers-color-scheme: dark) {
+  :root:not(.dark):not(.light) { --bg: #16181d; --card-bg: #1e2126; --text: #e6e8eb; --muted: #9aa3b0; --border: #3a3f47; --hover: #2a2f36; --ok: #6fdc8a; --ok-bg: #1f3326; --err: #f08a82; --err-bg: #3a2321; }
+}
+html.dark { color-scheme: dark; --bg: #16181d; --card-bg: #1e2126; --text: #e6e8eb; --muted: #9aa3b0; --border: #3a3f47; --hover: #2a2f36; --ok: #6fdc8a; --ok-bg: #1f3326; --err: #f08a82; --err-bg: #3a2321; }
+html.light { color-scheme: light; --bg: #fafafa; --card-bg: #ffffff; --text: #1a2027; --muted: #4b5563; --border: #c7cdd5; --hover: #e6e8eb; --ok: #1f7a2e; --ok-bg: #d9f2dd; --err: #b3261e; --err-bg: #fbe3e1; }
 * { box-sizing: border-box; }
-body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem; background: var(--bg, #fafafa); }
+body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 1.5rem; background: var(--bg); color: var(--text); }
 header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
-h1 { font-size: 1.4rem; margin: 0; }
-nav a { margin-right: 0.75rem; color: var(--muted); }
+h1 { font-size: 1.4rem; margin: 0; color: var(--text); }
+small { color: var(--muted); }
+nav a { margin-right: 0.75rem; color: var(--muted); text-decoration: none; }
+nav a:hover { color: var(--text); }
 main { max-width: 62rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
-.card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem; background: var(--card-bg, #fff); }
-.card h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
-.card h3 { margin: 0.75rem 0 0.5rem; font-size: 0.95rem; }
-label { display: block; margin: 0.5rem 0 0.15rem; font-weight: 600; }
-input, select, textarea { padding: 0.4rem 0.5rem; border: 1px solid var(--border); border-radius: 5px; width: min(24rem, 100%); }
-button { padding: 0.45rem 0.9rem; border-radius: 5px; border: 1px solid var(--border); background: var(--bg, #f6f6f6); cursor: pointer; }
-button:hover { background: var(--hover, #ececec); }
-button.danger { background: var(--err-bg); color: var(--err); }
+.card { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem; background: var(--card-bg); color: var(--text); }
+.card h2 { margin: 0 0 0.75rem; font-size: 1.05rem; color: var(--text); }
+.card h3 { margin: 0.75rem 0 0.5rem; font-size: 0.95rem; color: var(--text); }
+label { display: block; margin: 0.5rem 0 0.15rem; font-weight: 600; color: var(--text); }
+input, select, textarea { padding: 0.4rem 0.5rem; border: 1px solid var(--border); border-radius: 5px; width: min(24rem, 100%); background: var(--card-bg); color: var(--text); }
+input::placeholder, textarea::placeholder { color: var(--muted); }
+select { background: var(--card-bg); color: var(--text); }
+button { padding: 0.45rem 0.9rem; border-radius: 5px; border: 1px solid var(--border); background: var(--card-bg); color: var(--text); cursor: pointer; }
+button:hover { background: var(--hover); }
+button.danger { background: var(--err-bg); color: var(--err); border-color: var(--err); }
 .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem; }
-table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
-th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); }
+table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; color: var(--text); }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border); color: var(--text); }
 th { font-size: 0.85rem; text-transform: uppercase; color: var(--muted); }
-pre { background: var(--bg, #f6f6f6); padding: 0.6rem; border-radius: 5px; overflow-x: auto; }
-.msg { padding: 0.5rem 0.75rem; border-radius: 5px; margin: 0.5rem 0; display: none; }
+pre { background: var(--bg); color: var(--text); padding: 0.6rem; border-radius: 5px; overflow-x: auto; border: 1px solid var(--border); }
+.msg { padding: 0.5rem 0.75rem; border-radius: 5px; margin: 0.5rem 0; display: none; color: var(--text); }
 .msg.ok { display: block; background: var(--ok-bg); color: var(--ok); }
 .msg.err { display: block; background: var(--err-bg); color: var(--err); }
 .clip { font-family: monospace; word-break: break-all; }
 .empty { color: var(--muted); font-style: italic; }
-.badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.8rem; background: var(--bg, #eee); }
+.badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.8rem; background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
+#statusOut, #auditOut { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -41,7 +75,7 @@ pre { background: var(--bg, #f6f6f6); padding: 0.6rem; border-radius: 5px; overf
     <h1>smtp-router admin</h1>
     <small>signed in as <strong>{{.Email}}</strong> ({{.Name}})</small>
   </div>
-  <nav><a href="/">reload</a> <a href="/logout">logout</a></nav>
+  <nav><a href="/">reload</a> <a href="/logout">logout</a> <button id="themeBtn" onclick="toggleTheme()" title="toggle light/dark">theme</button></nav>
 </header>
 <main>
   <div id="msg" class="msg"></div>
@@ -117,6 +151,25 @@ pre { background: var(--bg, #f6f6f6); padding: 0.6rem; border-radius: 5px; overf
 </main>
 <script>
 const ID = {{printf "%q" .IDToken}};
+// Theme: auto by system, or explicit via localStorage. A manual choice wins.
+function applyTheme(dark) {
+  const html = document.documentElement;
+  html.classList.toggle('dark', dark);
+  html.classList.toggle('light', !dark);
+  const btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = dark ? 'light' : 'dark';
+}
+function currentDark() {
+  const saved = localStorage.getItem('smtp-router-theme');
+  if (saved === 'light' || saved === 'dark') return saved === 'dark';
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+function toggleTheme() {
+  const next = !currentDark();
+  localStorage.setItem('smtp-router-theme', next ? 'dark' : 'light');
+  applyTheme(next);
+}
+applyTheme(currentDark());
 function msg(txt, ok) {
   const el = document.getElementById('msg');
   el.className = 'msg ' + (ok ? 'ok' : 'err');

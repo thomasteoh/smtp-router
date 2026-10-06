@@ -118,16 +118,34 @@ Built as a container image via GitHub Actions → **GHCR**
 (`ghcr.io/thomasteoh/smtp-router`), pulled on the solo VM and run rootless
 under Podman. See `.github/workflows/build-and-publish.yml`.
 
-Local container run:
+The production deployment uses the repo's `compose.yaml` (rootless Podman
+compose, host networking, `userns_mode: keep-id:uid=10001,gid=10001`) managed
+by a `deploy`-user systemd unit:
+
+- Config bind-mounted **rw** at `/opt/smtp-router` so admin mutations
+  (add-provider/account/client, add-rule) persist back to `config.json`.
+- Data volume `smtp-router-data` at `/opt/smtp-router-data` holds the SQLite DB
+  (audit + usage + providers/accounts/clients), so it survives container
+  recreation.
+- Caddy terminates TLS at `smtp.harmonicr.com` and reverse-proxies to
+  `127.0.0.1:52150`; the router binds `:52150` under host networking.
+- The systemd user unit (`podman-compose-smtp-router.service`) runs
+  `podman-compose up -d --no-build` on boot and is enabled (symlinked into
+  `default.target.wants`); `deploy` has linger enabled so the unit runs without
+  a login.
+
+Manual operations on the VM (as `deploy`):
 
 ```sh
-podman run --rm -p 52150:8080 \
-  -v /opt/smtp-router:/opt/smtp-router:ro \
-  -v smtp-router-data:/opt/smtp-router-data \
-  -e SMTP_ROUTER_ADMIN_TOKEN=... \
-  ghcr.io/thomasteoh/smtp-router:latest \
-  serve -config /opt/smtp-router/config.json -db /opt/smtp-router-data/smtp-router.db
+podman-compose -f /opt/smtp-router/compose.yaml up -d --no-build   # start
+podman-compose -f /opt/smtp-router/compose.yaml down               # stop
+# After pulling a new image, force-recreate so the new image is used:
+podman-compose -f /opt/smtp-router/compose.yaml up -d --force-recreate
 ```
+
+> **Note**: `podman restart smtp-router` does **not** pick up a freshly pulled
+> `:latest` (it reuses the image the container was created from). Always use
+> `podman-compose up -d --force-recreate` after a pull.
 
 ## Security
 
@@ -149,4 +167,6 @@ podman run --rm -p 52150:8080 \
 ## Scope boundaries
 
 Deliberately **not** included: mailbox/IMAP, inbound (MX) mail, spam filtering,
-DKIM signing at this layer, and a web UI (CLI + API only).
+and DKIM signing at this layer. Management is CLI + API + an OIDC web console
+(see Admin web portal above); the console is served by the router itself, not a
+separate UI service.

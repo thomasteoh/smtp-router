@@ -3,9 +3,11 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/thomasteoh/smtp-router/internal/config"
 	"github.com/thomasteoh/smtp-router/internal/oidc"
 	"github.com/thomasteoh/smtp-router/internal/portal"
+	"github.com/thomasteoh/smtp-router/internal/queue"
 	"github.com/thomasteoh/smtp-router/internal/ratelimit"
 	"github.com/thomasteoh/smtp-router/internal/rules"
 	"github.com/thomasteoh/smtp-router/internal/webhook"
@@ -324,5 +327,92 @@ func TestSendUnauthorized(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != 401 {
 		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestSendQueuedAsync(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.Provider{{Name: "smtp", Type: "smtp", Host: "127.0.0.1", Port: 2525}},
+		Accounts:  map[string]config.Account{"alerts@harmonicr.com": {From: "alerts@harmonicr.com", Provider: "smtp"}},
+		Allowlist: []string{"*@harmonicr.com"},
+	}
+	au := auth.New()
+	key, _ := au.Generate("client-1")
+	ad, _ := audit.Open(":memory:")
+	defer ad.Close()
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	s, _ := New(cfg, au, ad, lim, rl, webhook.New(nil), &oidc.Verifier{})
+
+	// Attach a queue pool.
+	qstore, _ := queue.Open(":memory:")
+	defer qstore.Close()
+	pool := queue.NewPool(qstore, queue.Config{Workers: 1, Batch: 4, MaxRetries: 3},
+		func(ctx context.Context, j queue.Job) (string, error) { return "smtp", nil })
+	s.SetQueue(pool)
+
+	body := SendRequest{From: "alerts@harmonicr.com", To: []string{"x@example.com"}, Subject: "hi", Body: "hello"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/send", bytes.NewReader(b))
+	req.Header.Set("X-API-Key", key)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	// Async: 202 accepted with a job id.
+	if rec.Code != 202 {
+		t.Fatalf("status = %d, want 202", rec.Code)
+	}
+	var res SendResult
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if res.Status != "accepted" || res.JobID == 0 {
+		t.Fatalf("result = %+v, want accepted with job id", res)
+	}
+	if n, _ := qstore.Count("queued"); n != 1 {
+		t.Fatalf("queued = %d, want 1", n)
+	}
+}
+
+func TestAdminQueueStatsAndCancel(t *testing.T) {
+	cfg := &config.Config{
+		Providers:  []config.Provider{{Name: "smtp", Type: "smtp", Host: "127.0.0.1", Port: 2525}},
+		Accounts:   map[string]config.Account{"alerts@harmonicr.com": {From: "alerts@harmonicr.com", Provider: "smtp"}},
+		Allowlist:  []string{"*@harmonicr.com"},
+		AdminToken: "admin-token",
+	}
+	au := auth.New()
+	ad, _ := audit.Open(":memory:")
+	defer ad.Close()
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	s, _ := New(cfg, au, ad, lim, rl, webhook.New(nil), &oidc.Verifier{})
+
+	qstore, _ := queue.Open(":memory:")
+	defer qstore.Close()
+	pool := queue.NewPool(qstore, queue.Config{Workers: 1, Batch: 4, MaxRetries: 3},
+		func(ctx context.Context, j queue.Job) (string, error) { return "smtp", nil })
+	s.SetQueue(pool)
+
+	// Enqueue a job directly.
+	id, _ := qstore.Enqueue(queue.Job{Client: "client-1", From: "alerts@harmonicr.com", To: []string{"x@example.com"}})
+
+	// GET /admin/queue with token.
+	req := httptest.NewRequest("GET", "/admin/queue", nil)
+	req.Header.Set("Authorization", "Bearer admin-token")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("queue stats status = %d, want 200", rec.Code)
+	}
+
+	// Cancel the queued job.
+	req2 := httptest.NewRequest("DELETE", "/admin/queue/jobs/"+strconv.FormatInt(id, 10), nil)
+	req2.Header.Set("Authorization", "Bearer admin-token")
+	rec2 := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != 200 {
+		t.Fatalf("cancel status = %d, want 200", rec2.Code)
+	}
+	if n, _ := qstore.Count("dead"); n != 1 {
+		t.Fatalf("dead = %d, want 1", n)
 	}
 }

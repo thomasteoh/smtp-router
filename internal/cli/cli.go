@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/thomasteoh/smtp-router/internal/config"
 	"github.com/thomasteoh/smtp-router/internal/oidc"
 	"github.com/thomasteoh/smtp-router/internal/portal"
+	"github.com/thomasteoh/smtp-router/internal/queue"
 	"github.com/thomasteoh/smtp-router/internal/ratelimit"
 	"github.com/thomasteoh/smtp-router/internal/rules"
 	"github.com/thomasteoh/smtp-router/internal/server"
@@ -65,6 +67,42 @@ func Serve(cfgPath, addr, dbPath string) error {
 	}
 	// Record the config path so admin mutations persist across restart.
 	s.SetConfigPath(cfgPath)
+
+	// Async send queue: build the worker pool and start it when enabled.
+	var qctx context.Context
+	var qcancel context.CancelFunc
+	if cfg.Queue.Enabled {
+		qdbPath := cfg.Queue.DBPath
+		if qdbPath == "" {
+			qdbPath = dbPath + ".queue" // default: alongside the audit db
+		}
+		qstore, err := queue.Open(qdbPath)
+		if err != nil {
+			return fmt.Errorf("queue: %w", err)
+		}
+		// Recover jobs left 'running' by a previous run.
+		if _, err := qstore.Recover(5 * time.Second); err != nil {
+			return fmt.Errorf("queue recover: %w", err)
+		}
+		pool := queue.NewPool(qstore, queue.Config{
+			Workers:    cfg.Queue.Workers,
+			Batch:      cfg.Queue.Batch,
+			MaxSize:    cfg.Queue.MaxSize,
+			MaxRetries: cfg.Queue.MaxRetries,
+			RetryBase:  time.Duration(cfg.Queue.RetryBase) * time.Second,
+		}, func(ctx context.Context, job queue.Job) (string, error) {
+			// Deliver via the account's provider, honoring per-request
+			// override and per-account rate limits at delivery time.
+			return s.DeliverJob(ctx, job)
+		})
+		s.SetQueue(pool)
+		qctx, qcancel = context.WithCancel(context.Background())
+		go pool.Run(qctx)
+		defer func() {
+			qcancel()
+			_ = qstore.Close()
+		}()
+	}
 
 	// Admin web portal (OIDC Connect login flow). Reuses the router's verifier
 	// for the ID-token admin-role check; the code exchange uses the OIDC

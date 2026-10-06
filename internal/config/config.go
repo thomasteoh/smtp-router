@@ -67,6 +67,17 @@ type OIDC struct {
 	RedirectURL  string   `json:"redirect_url"`
 }
 
+// Queue is the asynchronous send queue tuning.
+type Queue struct {
+	Enabled    bool   `json:"enabled"`              // async send path (default off)
+	Workers    int    `json:"workers"`              // worker pool size
+	Batch      int    `json:"batch"`                // jobs claimed per worker per round
+	MaxSize    int    `json:"max_size"`             // max queued jobs (0 = unlimited)
+	MaxRetries int    `json:"max_retries"`          // retries per job before dead
+	RetryBase  int    `json:"retry_base"`           // initial backoff (seconds)
+	DBPath     string `json:"db_path"`              // queue sqlite path
+}
+
 // Config is the full router configuration.
 type Config struct {
 	Providers  []Provider          `json:"providers"`
@@ -78,7 +89,8 @@ type Config struct {
 	OIDC       *OIDC               `json:"oidc,omitempty"`
 	AdminToken string              `json:"admin_token,omitempty"`
 	// DefaultRate applies when an account has no explicit Rate.
-	DefaultRate Rate `json:"default_rate"`
+	DefaultRate Rate  `json:"default_rate"`
+	Queue       Queue `json:"queue,omitempty"`
 }
 
 // Load reads the config from a JSON file at path. If path is empty it looks

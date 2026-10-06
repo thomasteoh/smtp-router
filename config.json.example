@@ -54,5 +54,14 @@
     "redirect_url": "https://smtp.harmonicr.com/callback"
   },
   "admin_token": "admin-bearer-token",
-  "default_rate": { "day": 200, "month": 2000 }
+  "default_rate": { "day": 200, "month": 2000 },
+  "queue": {
+    "enabled": false,
+    "workers": 4,
+    "batch": 8,
+    "max_size": 0,
+    "max_retries": 3,
+    "retry_base": 30,
+    "db_path": "/opt/smtp-router-data/smtp-router-queue.db"
+  }
 }

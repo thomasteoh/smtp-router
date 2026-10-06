@@ -21,6 +21,7 @@ import (
 	"github.com/thomasteoh/smtp-router/internal/oidc"
 	"github.com/thomasteoh/smtp-router/internal/portal"
 	"github.com/thomasteoh/smtp-router/internal/provider"
+	"github.com/thomasteoh/smtp-router/internal/queue"
 	"github.com/thomasteoh/smtp-router/internal/ratelimit"
 	"github.com/thomasteoh/smtp-router/internal/rules"
 	"github.com/thomasteoh/smtp-router/internal/webhook"
@@ -43,12 +44,16 @@ type Server struct {
 	mu   sync.RWMutex
 	prov map[string]provider.Sender
 
+	// queue is the optional async send pool (nil when disabled).
+	queue *queue.Pool
+
 	// counters for /metrics.
 	reqs      atomic.Int64
 	delivered atomic.Int64
 	rateLimit atomic.Int64
 	denied    atomic.Int64
 	errors    atomic.Int64
+	queued    atomic.Int64
 }
 
 // New builds a Server. It wires providers from the config.
@@ -64,6 +69,12 @@ func New(cfg *config.Config, au *auth.Auth, ad *audit.Store, lim *ratelimit.Limi
 	return &Server{cfg: cfg, auth: au, audit: ad, limit: lim, rules: rl, hook: hk, oidc: ov, prov: prov}, nil
 }
 
+// SetQueue attaches an async send pool to the server. When set and enabled,
+// POST /send enqueues instead of delivering synchronously.
+func (s *Server) SetQueue(q *queue.Pool) {
+	s.queue = q
+}
+
 // SetConfigPath records the config file path so admin mutations can persist.
 func (s *Server) SetConfigPath(p string) { s.cfgPath = p }
 
@@ -77,6 +88,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
+
+	// Queue admin endpoints (token/OIDC-gated). Exposed only when the async
+	// queue is enabled, but the routes are registered unconditionally so a
+	// 404 is never a surprise; gateAdmin fails closed when disabled.
+	mux.HandleFunc("GET /admin/queue", s.gateAdmin(s.adminQueueStats))
+	mux.HandleFunc("GET /admin/queue/jobs", s.gateAdmin(s.adminQueueJobs))
+	mux.HandleFunc("DELETE /admin/queue/jobs/{id}", s.gateAdmin(s.adminQueueCancel))
 
 	// Admin endpoints (token/OIDC-gated).
 	mux.HandleFunc("POST /admin/providers", s.gateAdmin(s.adminAddProvider))
@@ -113,6 +131,16 @@ type SendRequest struct {
 	HTML        string   `json:"html"`
 	Attachments []Attach `json:"attachments,omitempty"`
 	Provider    string   `json:"provider"`
+	Priority    int      `json:"priority,omitempty"` // queue priority (0 = default)
+	SendAt      string   `json:"send_at,omitempty"`  // RFC3339 schedule (queue only)
+}
+
+// SendResult is the response for POST /send.
+type SendResult struct {
+	Status   string `json:"status"` // delivered | rate_limited | denied | error | accepted
+	Provider string `json:"provider,omitempty"`
+	Error    string `json:"error,omitempty"`
+	JobID    int64  `json:"job_id,omitempty"` // queue job id (async only)
 }
 
 // Attach is an attachment entry.
@@ -120,13 +148,6 @@ type Attach struct {
 	Filename    string `json:"filename"`
 	ContentB64  string `json:"content_b64"`
 	ContentType string `json:"content_type"`
-}
-
-// SendResult is the response for POST /send.
-type SendResult struct {
-	Status   string `json:"status"` // delivered | rate_limited | denied | error
-	Provider string `json:"provider,omitempty"`
-	Error    string `json:"error,omitempty"`
 }
 
 // sanitizeValue rejects CR/LF in a user-supplied value, preventing MIME header
@@ -150,6 +171,22 @@ func validateAttach(a Attach) error {
 		return fmt.Errorf("attachment content is not valid base64")
 	}
 	return nil
+}
+
+// toQueueAttachments converts server attachments to queue attachments.
+func toQueueAttachments(in []Attach) []queue.Attachment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]queue.Attachment, 0, len(in))
+	for _, a := range in {
+		out = append(out, queue.Attachment{
+			Filename:    a.Filename,
+			ContentType: a.ContentType,
+			ContentB64:  a.ContentB64,
+		})
+	}
+	return out
 }
 
 // handleSend processes a send request.
@@ -249,6 +286,47 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown provider", http.StatusBadRequest)
 		return
 	}
+
+	// Async path: when the queue is enabled, enqueue the send and return 202
+	// accepted. Rate limiting is enforced at delivery time by the worker, so
+	// a burst is queued rather than rejected. The client gets a job id.
+	if s.queue != nil {
+		s.queued.Add(1)
+		job := queue.Job{
+			RequestID:   req.RequestID,
+			Client:      client,
+			From:        req.From,
+			To:          req.To,
+			Subject:     req.Subject,
+			Body:        req.Body,
+			HTML:        req.HTML,
+			Provider:    provName,
+			Priority:    0,
+			Attachments: toQueueAttachments(req.Attachments),
+		}
+		// Optional per-request priority from the JSON body.
+		if req.Priority > 0 {
+			job.Priority = req.Priority
+		}
+		// Optional scheduled send (queue only). Invalid RFC3339 is rejected.
+		if req.SendAt != "" {
+			t, err := time.Parse(time.RFC3339, req.SendAt)
+			if err != nil {
+				http.Error(w, "bad request: send_at "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			job.SendAt = t
+		}
+		id, err := s.queue.Enqueue(job)
+		if err != nil {
+			s.errors.Add(1)
+			http.Error(w, "enqueue: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, SendResult{Status: "accepted", Provider: provName, JobID: id})
+		return
+	}
+
 	dayLimit, monthLimit := acc.Rate.Day, acc.Rate.Month
 	if dayLimit == 0 && monthLimit == 0 {
 		dayLimit, monthLimit = s.cfg.DefaultRate.Day, s.cfg.DefaultRate.Month
@@ -306,6 +384,102 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, SendResult{Status: audit.StatusDelivered, Provider: provName})
 }
 
+// DeliverJob delivers a queued job through its provider, enforcing rate
+// limits at delivery time. It records audit and fires webhooks. On rate-limit
+// refusal it returns a queue.RateLimitedError (the pool re-queues without
+// counting the attempt); on a real delivery failure it returns the error (the
+// pool retries with backoff). It returns the provider name on success.
+func (s *Server) DeliverJob(ctx context.Context, job queue.Job) (string, error) {
+	// Resolve provider: per-request override wins, else account default.
+	provName := job.Provider
+	if provName == "" {
+		s.mu.RLock()
+		if acc, ok := s.cfg.LookupAccount(job.From); ok {
+			provName = acc.Provider
+		}
+		s.mu.RUnlock()
+	}
+	if provName == "" {
+		return "", fmt.Errorf("no provider for %q", job.From)
+	}
+
+	// Rate limit at delivery time (day + month). Re-queue on refusal.
+	s.mu.RLock()
+	acc, ok := s.cfg.LookupAccount(job.From)
+	s.mu.RUnlock()
+	if ok {
+		day, month := acc.Rate.Day, acc.Rate.Month
+		if day == 0 && month == 0 {
+			day, month = s.cfg.DefaultRate.Day, s.cfg.DefaultRate.Month
+		}
+		if !s.limit.Allow(job.From, day, month) {
+			return "", &queue.RateLimitedError{RetryAfter: 15 * time.Minute}
+		}
+	}
+
+	// Build the provider message from the job.
+	msg := provider.Message{
+		From:    job.From,
+		To:      job.To,
+		Subject: job.Subject,
+		Body:    job.Body,
+		HTML:    job.HTML,
+	}
+	for _, a := range job.Attachments {
+		msg.Attachments = append(msg.Attachments, provider.Attachment{
+			Filename:    a.Filename,
+			ContentType: a.ContentType,
+			ContentB64:  a.ContentB64,
+		})
+	}
+
+	// Deliver through the provider.
+	s.mu.RLock()
+	sender, ok := s.prov[provName]
+	s.mu.RUnlock()
+	if !ok || sender == nil {
+		return "", fmt.Errorf("provider %q not found", provName)
+	}
+	if err := sender.Deliver(ctx, msg); err != nil {
+		return "", err
+	}
+
+	// Record success and fire webhook.
+	s.record(job.Client, jobToSendRequest(job), audit.StatusDelivered, "", job.RequestID)
+	if s.hook != nil {
+		s.hook.Fire(ctx, webhook.EventDelivered, map[string]any{
+			"client": job.Client, "from": job.From, "provider": provName,
+		})
+	}
+	return provName, nil
+}
+
+// jobToSendRequest converts a queued job back to a SendRequest for audit.
+func jobToSendRequest(j queue.Job) SendRequest {
+	return SendRequest{
+		RequestID:   j.RequestID,
+		From:        j.From,
+		To:          j.To,
+		Subject:     j.Subject,
+		Body:        j.Body,
+		HTML:        j.HTML,
+		Provider:    j.Provider,
+		Attachments: fromQueueAttachments(j.Attachments),
+	}
+}
+
+// fromQueueAttachments converts queue attachments to server attachments.
+func fromQueueAttachments(in []queue.Attachment) []Attach {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Attach, 0, len(in))
+	for _, a := range in {
+		out = append(out, Attach{Filename: a.Filename, ContentType: a.ContentType, ContentB64: a.ContentB64})
+	}
+	return out
+}
+
 // record writes an audit row for a send.
 func (s *Server) record(client string, req SendRequest, status, errMsg, requestID string) {
 	if s.audit == nil {
@@ -350,6 +524,64 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# TYPE smtp_router_rate_limited_total counter\nsmtp_router_rate_limited_total %d\n", s.rateLimit.Load())
 	fmt.Fprintf(w, "# TYPE smtp_router_denied_total counter\nsmtp_router_denied_total %d\n", s.denied.Load())
 	fmt.Fprintf(w, "# TYPE smtp_router_errors_total counter\nsmtp_router_errors_total %d\n", s.errors.Load())
+	fmt.Fprintf(w, "# TYPE smtp_router_queued_total counter\nsmtp_router_queued_total %d\n", s.queued.Load())
+}
+
+// adminQueueStats reports queue depth and aggregate counters.
+func (s *Server) adminQueueStats(w http.ResponseWriter, r *http.Request) {
+	if s.queue == nil {
+		http.Error(w, "queue disabled", http.StatusNotImplemented)
+		return
+	}
+	st, err := s.queue.Stats()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// adminQueueJobs lists recent queue jobs, optionally filtered by status.
+func (s *Server) adminQueueJobs(w http.ResponseWriter, r *http.Request) {
+	if s.queue == nil {
+		http.Error(w, "queue disabled", http.StatusNotImplemented)
+		return
+	}
+	status := r.URL.Query().Get("status")
+	n := 0
+	_, _ = fmt.Sscanf(r.URL.Query().Get("n"), "%d", &n)
+	if n < 0 || n > 500 {
+		n = 50
+	}
+	// The pool wraps the store; expose a List through the pool accessor.
+	jobs, err := s.queue.List(n, status)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, jobs)
+}
+
+// adminQueueCancel cancels a queued job by id. Returns 404 if the job is not
+// cancellable (e.g. it is already running).
+func (s *Server) adminQueueCancel(w http.ResponseWriter, r *http.Request) {
+	if s.queue == nil {
+		http.Error(w, "queue disabled", http.StatusNotImplemented)
+		return
+	}
+	idStr := r.PathValue("id")
+	var id int64
+	_, _ = fmt.Sscanf(idStr, "%d", &id)
+	ok, err := s.queue.Cancel(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "job not cancellable", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
 }
 
 // gateAdmin wraps an admin handler with token or OIDC auth. It fails closed:

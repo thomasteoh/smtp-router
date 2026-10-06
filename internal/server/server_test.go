@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"strconv"
@@ -61,6 +62,66 @@ func startFakeSMTP(t *testing.T) func() {
 					case strings.HasPrefix(line, "DATA"):
 						c.Write([]byte("354 go ahead\r\n"))
 						// read until "."
+						for {
+							d, err := r.ReadString('\n')
+							if err != nil {
+								return
+							}
+							if strings.TrimRight(d, "\r\n") == "." {
+								break
+							}
+						}
+						c.Write([]byte("250 ok queued\r\n"))
+					case strings.HasPrefix(line, "QUIT"):
+						c.Write([]byte("221 bye\r\n"))
+						return
+					default:
+						c.Write([]byte("250 ok\r\n"))
+					}
+				}
+			}(c)
+		}
+	}()
+	return func() { ln.Close() }
+}
+
+// startFakeSMTPOn runs a minimal SMTP responder on the given port (for tests
+// with multiple providers). Returns a cleanup func.
+func startFakeSMTPOn(t *testing.T, port int) func() {
+	t.Helper()
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("fake smtp listen on %d: %v", port, err)
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				c.Write([]byte("220 fake ESMTP\r\n"))
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					line = strings.TrimRight(line, "\r\n")
+					switch {
+					case strings.HasPrefix(line, "EHLO"):
+						c.Write([]byte("250-fake\r\n250 OK\r\n"))
+					case strings.HasPrefix(line, "HELO"):
+						c.Write([]byte("250 OK\r\n"))
+					case strings.HasPrefix(line, "AUTH"):
+						c.Write([]byte("235 ok\r\n"))
+					case strings.HasPrefix(line, "MAIL"):
+						c.Write([]byte("250 ok\r\n"))
+					case strings.HasPrefix(line, "RCPT"):
+						c.Write([]byte("250 ok\r\n"))
+					case strings.HasPrefix(line, "DATA"):
+						c.Write([]byte("354 go ahead\r\n"))
 						for {
 							d, err := r.ReadString('\n')
 							if err != nil {
@@ -172,6 +233,100 @@ func TestSendRateLimited(t *testing.T) {
 	s.Handler().ServeHTTP(rec2, req2)
 	if rec2.Code != 429 {
 		t.Fatalf("second status = %d, want 429", rec2.Code)
+	}
+}
+
+func TestSendAllocationRoundRobin(t *testing.T) {
+	cleanup1 := startFakeSMTPOn(t, 2525)
+	defer cleanup1()
+	cleanup2 := startFakeSMTPOn(t, 2526)
+	defer cleanup2()
+	cfg := &config.Config{
+		Providers: []config.Provider{
+			{Name: "smtp-a", Type: "smtp", Host: "127.0.0.1", Port: 2525},
+			{Name: "smtp-b", Type: "smtp", Host: "127.0.0.1", Port: 2526},
+		},
+		Accounts: map[string]config.Account{
+			"alerts@harmonicr.com": {From: "alerts@harmonicr.com", Provider: "smtp-a",
+				Allocation: []config.AllocEntry{{Name: "smtp-a", Weight: 1}, {Name: "smtp-b", Weight: 1}}},
+		},
+		Allowlist: []string{"*@harmonicr.com"},
+	}
+	au := auth.New()
+	key, _ := au.Generate("client-1")
+	ad, _ := audit.Open(":memory:")
+	defer ad.Close()
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	s, _ := New(cfg, au, ad, lim, rl, webhook.New(nil), &oidc.Verifier{})
+
+	body := SendRequest{From: "alerts@harmonicr.com", To: []string{"x@example.com"}, Subject: "hi", Body: "hello"}
+	b, _ := json.Marshal(body)
+
+	// Two sends must alternate across the two providers (round-robin).
+	providers := []string{}
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest("POST", "/send", bytes.NewReader(b))
+		req.Header.Set("X-API-Key", key)
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("send %d status = %d", i, rec.Code)
+		}
+		var res SendResult
+		json.Unmarshal(rec.Body.Bytes(), &res)
+		providers = append(providers, res.Provider)
+	}
+	// Expect alternating a,b,a,b (equal weights).
+	for i, p := range providers {
+		want := "smtp-a"
+		if i%2 == 1 {
+			want = "smtp-b"
+		}
+		if p != want {
+			t.Fatalf("send %d provider = %q, want %q (got %v)", i, p, want, providers)
+		}
+	}
+}
+
+func TestSendAllocationPerRequestOverride(t *testing.T) {
+	cleanup1 := startFakeSMTPOn(t, 2525)
+	defer cleanup1()
+	cleanup2 := startFakeSMTPOn(t, 2526)
+	defer cleanup2()
+	cfg := &config.Config{
+		Providers: []config.Provider{
+			{Name: "smtp-a", Type: "smtp", Host: "127.0.0.1", Port: 2525},
+			{Name: "smtp-b", Type: "smtp", Host: "127.0.0.1", Port: 2526},
+		},
+		Accounts: map[string]config.Account{
+			"alerts@harmonicr.com": {From: "alerts@harmonicr.com", Provider: "smtp-a",
+				Allocation: []config.AllocEntry{{Name: "smtp-a", Weight: 1}, {Name: "smtp-b", Weight: 1}}},
+		},
+		Allowlist: []string{"*@harmonicr.com"},
+	}
+	au := auth.New()
+	key, _ := au.Generate("client-1")
+	ad, _ := audit.Open(":memory:")
+	defer ad.Close()
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	s, _ := New(cfg, au, ad, lim, rl, webhook.New(nil), &oidc.Verifier{})
+
+	// Explicit provider override wins over allocation.
+	body := SendRequest{From: "alerts@harmonicr.com", To: []string{"x@example.com"}, Provider: "smtp-b"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/send", bytes.NewReader(b))
+	req.Header.Set("X-API-Key", key)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var res SendResult
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if res.Provider != "smtp-b" {
+		t.Fatalf("provider = %q, want smtp-b (override)", res.Provider)
 	}
 }
 

@@ -130,9 +130,27 @@ Useful features:
   `DELETE /admin/queue/jobs/{id}` (cancel a queued job).
 
 The queue DB defaults to `<audit-db>.queue` alongside the audit database.
-See `config.json.example` for the `queue` block. Note: an account still maps
-to a single provider — cross-provider allocation (round-robin / tier-based /
-proportional) is not implemented.
+See `config.json.example` for the `queue` block.
+
+## Provider allocation
+
+Each account can route across multiple providers instead of a single one.
+Set `allocation` (a list of `{ "name": "<provider>", "weight": N }` entries)
+on an account; the router picks a provider per send using smooth weighted
+round-robin:
+
+- **Equal weights** (all `1`) → plain **round-robin**, cycling evenly across
+  every listed provider.
+- **Tiered weights** (e.g. `3` / `1`) → **proportional** distribution toward
+  the higher-weighted provider, while still cycling through the lower-tier
+  one so it is never starved.
+- **Zero/negative weight** is treated as `1`, so every listed provider is used.
+
+A per-request `provider` override in the send payload wins over the
+account's allocation. If `allocation` is empty the account falls back to its
+single `provider`. Accounts may define both; `allocation` takes precedence
+for delivery. Allocation entries must reference configured providers, and
+the config is validated on load.
 
 ## Config
 

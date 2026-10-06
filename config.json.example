@@ -26,6 +26,14 @@
       "from": "noreply@harmonicr.com",
       "provider": "api-provider",
       "rate": { "day": 100, "month": 500 }
+    },
+    "billing@harmonicr.com": {
+      "from": "billing@harmonicr.com",
+      "allocation": [
+        { "name": "smtp-harmonicr", "weight": 3 },
+        { "name": "api-provider", "weight": 1 }
+      ],
+      "rate": { "day": 100, "month": 500 }
     }
   },
   "allowlist": ["*@harmonicr.com"],

@@ -43,6 +43,8 @@ type Server struct {
 	// endpoints mutate while handleSend reads them.
 	mu   sync.RWMutex
 	prov map[string]provider.Sender
+	// alloc maps a from address to its weighted round-robin selector.
+	alloc map[string]*allocator
 
 	// queue is the optional async send pool (nil when disabled).
 	queue *queue.Pool
@@ -66,7 +68,19 @@ func New(cfg *config.Config, au *auth.Auth, ad *audit.Store, lim *ratelimit.Limi
 		}
 		prov[p.Name] = s
 	}
-	return &Server{cfg: cfg, auth: au, audit: ad, limit: lim, rules: rl, hook: hk, oidc: ov, prov: prov}, nil
+	// Build per-account weighted round-robin allocators from Allocation lists.
+	alloc := make(map[string]*allocator)
+	for from, a := range cfg.Accounts {
+		if len(a.Allocation) == 0 {
+			continue
+		}
+		choices := make([]providerChoice, 0, len(a.Allocation))
+		for _, e := range a.Allocation {
+			choices = append(choices, providerChoice{name: e.Name, weight: e.Weight})
+		}
+		alloc[from] = newAllocator(choices)
+	}
+	return &Server{cfg: cfg, auth: au, audit: ad, limit: lim, rules: rl, hook: hk, oidc: ov, prov: prov, alloc: alloc}, nil
 }
 
 // SetQueue attaches an async send pool to the server. When set and enabled,
@@ -269,13 +283,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	var provName string
 	var sender provider.Sender
 	if ok {
-		provName = req.Provider
-		if provName == "" {
-			provName = acc.Provider
-		}
-		if provName != "" {
-			sender, ok = s.prov[provName]
-		}
+		provName, sender = s.resolveProviderLocked(req.From, acc, req.Provider)
 	}
 	s.mu.RUnlock()
 	if !ok {
@@ -390,31 +398,26 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 // counting the attempt); on a real delivery failure it returns the error (the
 // pool retries with backoff). It returns the provider name on success.
 func (s *Server) DeliverJob(ctx context.Context, job queue.Job) (string, error) {
-	// Resolve provider: per-request override wins, else account default.
-	provName := job.Provider
-	if provName == "" {
-		s.mu.RLock()
-		if acc, ok := s.cfg.LookupAccount(job.From); ok {
-			provName = acc.Provider
-		}
-		s.mu.RUnlock()
+	// Resolve provider: per-request override wins, else weighted allocation,
+	// else account default.
+	s.mu.RLock()
+	acc, ok := s.cfg.LookupAccount(job.From)
+	var provName string
+	if ok {
+		provName, _ = s.resolveProviderLocked(job.From, acc, job.Provider)
 	}
+	s.mu.RUnlock()
 	if provName == "" {
 		return "", fmt.Errorf("no provider for %q", job.From)
 	}
 
 	// Rate limit at delivery time (day + month). Re-queue on refusal.
-	s.mu.RLock()
-	acc, ok := s.cfg.LookupAccount(job.From)
-	s.mu.RUnlock()
-	if ok {
-		day, month := acc.Rate.Day, acc.Rate.Month
-		if day == 0 && month == 0 {
-			day, month = s.cfg.DefaultRate.Day, s.cfg.DefaultRate.Month
-		}
-		if !s.limit.Allow(job.From, day, month) {
-			return "", &queue.RateLimitedError{RetryAfter: 15 * time.Minute}
-		}
+	day, month := acc.Rate.Day, acc.Rate.Month
+	if day == 0 && month == 0 {
+		day, month = s.cfg.DefaultRate.Day, s.cfg.DefaultRate.Month
+	}
+	if !s.limit.Allow(job.From, day, month) {
+		return "", &queue.RateLimitedError{RetryAfter: 15 * time.Minute}
 	}
 
 	// Build the provider message from the job.
@@ -478,6 +481,36 @@ func fromQueueAttachments(in []queue.Attachment) []Attach {
 		out = append(out, Attach{Filename: a.Filename, ContentType: a.ContentType, ContentB64: a.ContentB64})
 	}
 	return out
+}
+
+// resolveProviderLocked picks a provider name for an account. Callers hold
+// s.mu (R or W lock). Priority: a per-request override wins, else the
+// account's weighted Allocation (round-robin), else the single Provider.
+// It returns the provider name and its sender; ok is false when the account
+// is not found or no provider resolves.
+func (s *Server) resolveProviderLocked(from string, acc config.Account, override string) (string, provider.Sender) {
+	if override != "" {
+		if sender, ok := s.prov[override]; ok {
+			return override, sender
+		}
+		return "", nil
+	}
+	// Weighted round-robin allocation, if configured for this account.
+	if al, ok := s.alloc[from]; ok && al != nil {
+		name, err := al.pick()
+		if err == nil {
+			if sender, ok := s.prov[name]; ok {
+				return name, sender
+			}
+		}
+	}
+	// Fallback to single provider.
+	if acc.Provider != "" {
+		if sender, ok := s.prov[acc.Provider]; ok {
+			return acc.Provider, sender
+		}
+	}
+	return "", nil
 }
 
 // record writes an audit row for a send.
@@ -645,8 +678,9 @@ func (s *Server) adminAddAccount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if a.From == "" || a.Provider == "" {
-		http.Error(w, "from and provider required", http.StatusBadRequest)
+	// Either a single Provider or a weighted Allocation must be present.
+	if a.From == "" || (a.Provider == "" && len(a.Allocation) == 0) {
+		http.Error(w, "from and provider (or allocation) required", http.StatusBadRequest)
 		return
 	}
 	s.mu.Lock()
@@ -654,6 +688,19 @@ func (s *Server) adminAddAccount(w http.ResponseWriter, r *http.Request) {
 		s.cfg.Accounts = make(map[string]config.Account)
 	}
 	s.cfg.Accounts[a.From] = a
+	// Rebuild the allocator for this account from its Allocation list.
+	if len(a.Allocation) > 0 {
+		choices := make([]providerChoice, 0, len(a.Allocation))
+		for _, e := range a.Allocation {
+			choices = append(choices, providerChoice{name: e.Name, weight: e.Weight})
+		}
+		if s.alloc == nil {
+			s.alloc = make(map[string]*allocator)
+		}
+		s.alloc[a.From] = newAllocator(choices)
+	} else {
+		delete(s.alloc, a.From)
+	}
 	s.mu.Unlock()
 	s.persistConfig()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "account": a.From})
@@ -768,6 +815,7 @@ func (s *Server) adminDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(s.cfg.Accounts, from)
+	delete(s.alloc, from)
 	s.mu.Unlock()
 	s.persistConfig()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "account": from})

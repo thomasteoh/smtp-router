@@ -32,12 +32,20 @@ type Rate struct {
 	Month int `json:"month"`
 }
 
+// AllocEntry is one weighted provider in an account's allocation list.
+type AllocEntry struct {
+	Name   string `json:"name"`
+	Weight int    `json:"weight"` // relative weight (0 = treated as 1)
+}
+
 // Account is a sending account (a `from` address) plus its provider routing
-// and per-account rate limits.
+// and per-account rate limits. Either Provider (single) or Allocation
+// (weighted list) is used for delivery.
 type Account struct {
-	From     string `json:"from"`
-	Provider string `json:"provider"`
-	Rate     Rate   `json:"rate"`
+	From       string       `json:"from"`
+	Provider   string       `json:"provider"`
+	Allocation []AllocEntry `json:"allocation,omitempty"` // weighted providers
+	Rate       Rate         `json:"rate"`
 }
 
 // Webhook is an outgoing notification endpoint, fired on send outcome.
@@ -175,6 +183,17 @@ func (c *Config) Validate() error {
 			}
 		default:
 			return fmt.Errorf("provider %q: unsupported type %q", p.Name, p.Type)
+		}
+	}
+	// Allocation entries must reference configured providers.
+	for from, a := range c.Accounts {
+		for _, e := range a.Allocation {
+			if e.Name == "" {
+				return fmt.Errorf("account %q: allocation entry with empty provider name", from)
+			}
+			if c.ProviderNamed(e.Name) == nil {
+				return fmt.Errorf("account %q: allocation references unknown provider %q", from, e.Name)
+			}
 		}
 	}
 	return nil

@@ -19,6 +19,7 @@ import (
 	"github.com/thomasteoh/smtp-router/internal/audit"
 	"github.com/thomasteoh/smtp-router/internal/config"
 	"github.com/thomasteoh/smtp-router/internal/oidc"
+	"github.com/thomasteoh/smtp-router/internal/portal"
 	"github.com/thomasteoh/smtp-router/internal/provider"
 	"github.com/thomasteoh/smtp-router/internal/ratelimit"
 	"github.com/thomasteoh/smtp-router/internal/rules"
@@ -35,6 +36,7 @@ type Server struct {
 	rules   *rules.Rules
 	hook    *webhook.Dispatcher
 	oidc    *oidc.Verifier
+	portal  *portal.Portal
 
 	// mu guards the mutable provider map and config slices, which admin
 	// endpoints mutate while handleSend reads them.
@@ -65,6 +67,9 @@ func New(cfg *config.Config, au *auth.Auth, ad *audit.Store, lim *ratelimit.Limi
 // SetConfigPath records the config file path so admin mutations can persist.
 func (s *Server) SetConfigPath(p string) { s.cfgPath = p }
 
+// SetPortal attaches the admin web portal to the server's handler.
+func (s *Server) SetPortal(p *portal.Portal) { s.portal = p }
+
 // Handler returns the http.Handler for the API.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -80,6 +85,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/rules", s.gateAdmin(s.adminAddRule))
 	mux.HandleFunc("GET /admin/audit", s.gateAdmin(s.adminListAudit))
 	mux.HandleFunc("GET /admin/usage", s.gateAdmin(s.adminUsage))
+
+	// Admin web portal (OIDC Connect login flow + HTML console). Mounted only
+	// when a portal is attached; the portal's own /login, /callback, /logout
+	// and /portal routes are exposed regardless of the OIDC verifier state.
+	if s.portal != nil {
+		s.portal.Register(mux)
+	}
 	return mux
 }
 

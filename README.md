@@ -85,6 +85,24 @@ curl -H 'Authorization: Bearer <admin-token>' http://127.0.0.1:8080/admin/audit
 Human admin access is available via OIDC (Zitadel, `auth.harmonicr.com`),
 role-gated. See `config.json.example`.
 
+### Admin web portal
+
+The router also serves an OIDC Connect admin web console (no separate
+service). Visit `https://smtp.harmonicr.com/portal`:
+
+- `GET /login` redirects to Zitadel authorize (OIDC authorization-code flow).
+- `GET /callback` exchanges the code, verifies the ID token via the router's
+  OIDC verifier, checks the `admin` role, and sets a session cookie
+  (`smtp_router_sess`, HttpOnly/Secure, 12h).
+- `GET /portal` renders the embedded HTML console, which calls the token-gated
+  admin API using the session's ID token as a Bearer credential.
+- `GET /logout` clears the session.
+
+The console manages providers, accounts, clients (API keys), allow/deny rules,
+and shows audit + usage. The OIDC app must have role assertions enabled (the
+`admin` role key must ride the ID token) and the user must hold the `admin`
+role on the internal project.
+
 ## Config
 
 See `config.json.example` for the full shape: providers (smtp|api), accounts

@@ -49,7 +49,7 @@
     "issuer": "https://auth.harmonicr.com",
     "client_id": "smtp-router-oidc-client",
     "client_secret": "oidc-client-secret",
-    "scopes": ["openid", "profile"],
+    "scopes": ["openid", "profile", "email"],
     "admin_role": "mail-admin",
     "redirect_url": "https://smtp.harmonicr.com/callback"
   },

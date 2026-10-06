@@ -32,6 +32,11 @@ func New(cfg Config) *Verifier {
 	return &Verifier{cfg: cfg}
 }
 
+// Config returns the verifier's OIDC config (e.g. the admin role key).
+func (v *Verifier) Config() Config {
+	return v.cfg
+}
+
 // Verify checks an ID token's signature, issuer, and audience, then returns
 // the claims and whether the token carries the admin role.
 func (v *Verifier) Verify(ctx context.Context, raw string) (claims map[string]any, admin bool, err error) {

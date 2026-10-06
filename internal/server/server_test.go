@@ -13,6 +13,7 @@ import (
 	"github.com/thomasteoh/smtp-router/internal/audit"
 	"github.com/thomasteoh/smtp-router/internal/config"
 	"github.com/thomasteoh/smtp-router/internal/oidc"
+	"github.com/thomasteoh/smtp-router/internal/portal"
 	"github.com/thomasteoh/smtp-router/internal/ratelimit"
 	"github.com/thomasteoh/smtp-router/internal/rules"
 	"github.com/thomasteoh/smtp-router/internal/webhook"
@@ -194,6 +195,36 @@ func TestSendDenied(t *testing.T) {
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != 403 {
 		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestPortalRouteRegistered(t *testing.T) {
+	cfg := &config.Config{Allowlist: []string{"*@harmonicr.com"}}
+	au := auth.New()
+	ad, _ := audit.Open(":memory:")
+	defer ad.Close()
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	ov := &oidc.Verifier{}
+	s, _ := New(cfg, au, ad, lim, rl, webhook.New(nil), ov)
+	// Attach a portal (OIDC login flow) and verify the route is reachable.
+	s.SetPortal(portal.New(portal.Config{
+		Issuer:       "https://auth.harmonicr.com",
+		ClientID:     "client",
+		ClientSecret: "secret",
+		Scopes:       []string{"openid", "profile", "email"},
+		AdminRole:    "admin",
+		RedirectURL:  "https://smtp.harmonicr.com/callback",
+	}, &oidc.Verifier{}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/portal", nil)
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 302 {
+		t.Fatalf("status = %d, want 302 redirect to login", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/login" {
+		t.Fatalf("location = %q, want /login", got)
 	}
 }
 

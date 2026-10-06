@@ -11,6 +11,7 @@ import (
 	"github.com/thomasteoh/smtp-router/internal/audit"
 	"github.com/thomasteoh/smtp-router/internal/config"
 	"github.com/thomasteoh/smtp-router/internal/oidc"
+	"github.com/thomasteoh/smtp-router/internal/portal"
 	"github.com/thomasteoh/smtp-router/internal/ratelimit"
 	"github.com/thomasteoh/smtp-router/internal/rules"
 	"github.com/thomasteoh/smtp-router/internal/server"
@@ -64,6 +65,20 @@ func Serve(cfgPath, addr, dbPath string) error {
 	}
 	// Record the config path so admin mutations persist across restart.
 	s.SetConfigPath(cfgPath)
+
+	// Admin web portal (OIDC Connect login flow). Reuses the router's verifier
+	// for the ID-token admin-role check; the code exchange uses the OIDC
+	// client secret from the config.
+	if cfg.OIDC != nil {
+		s.SetPortal(portal.New(portal.Config{
+			Issuer:       cfg.OIDC.Issuer,
+			ClientID:     cfg.OIDC.ClientID,
+			ClientSecret: cfg.OIDC.ClientSecret,
+			Scopes:       cfg.OIDC.Scopes,
+			AdminRole:    cfg.OIDC.AdminRole,
+			RedirectURL:  cfg.OIDC.RedirectURL,
+		}, ov))
+	}
 
 	srv := &http.Server{
 		Addr:              addr,

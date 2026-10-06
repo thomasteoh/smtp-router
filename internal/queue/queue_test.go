@@ -97,7 +97,8 @@ func TestRequeueAndDead(t *testing.T) {
 	s := mkStore(t)
 	defer s.Close()
 	id, _ := s.Enqueue(Job{Client: "c", From: "a@h.com", To: []string{"b@h.com"}})
-	jobs, _ := s.Claim(10, time.Now().UTC())
+	var jobs []Job
+	_, _ = s.Claim(10, time.Now().UTC())
 	// Requeue after a failure: attempt increments, next_attempt set.
 	if err := s.Requeue(id, time.Now().UTC().Add(time.Minute), "boom"); err != nil {
 		t.Fatalf("requeue: %v", err)
@@ -127,12 +128,12 @@ func TestRateLimitedRequeueDoesNotCountAttempt(t *testing.T) {
 	s := mkStore(t)
 	defer s.Close()
 	id, _ := s.Enqueue(Job{Client: "c", From: "a@h.com", To: []string{"b@h.com"}})
-	jobs, _ := s.Claim(10, time.Now().UTC())
+	_, _ = s.Claim(10, time.Now().UTC())
 	if err := s.RequeueRateLimited(id, time.Now().UTC().Add(time.Hour)); err != nil {
 		t.Fatalf("requeue rate limited: %v", err)
 	}
 	// Attempts must NOT increment.
-	jobs, _ = s.Claim(10, time.Now().UTC().Add(2*time.Hour))
+	jobs, _ := s.Claim(10, time.Now().UTC().Add(2*time.Hour))
 	if jobs[0].Attempts != 0 {
 		t.Fatalf("rate-limited requeue counted an attempt: %d", jobs[0].Attempts)
 	}

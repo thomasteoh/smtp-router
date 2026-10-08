@@ -281,11 +281,9 @@ func (p *Portal) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	// post_logout_redirect_uri must point back at the portal's /logout (site
 	// root), not the OIDC /callback. Derive the site base from redirectURL by
-	// stripping the /callback suffix, then append /logout.
-	site := p.redirectURL
-	if strings.HasSuffix(site, "/callback") {
-		site = strings.TrimSuffix(site, "/callback")
-	}
+	// stripping the /callback suffix, then append /logout. TrimSuffix is safe
+	// even when the suffix is absent (returns the string unchanged).
+	site := strings.TrimSuffix(p.redirectURL, "/callback")
 	q.Set("post_logout_redirect_uri", site+"/logout")
 	http.Redirect(w, r, p.issuer+"/oidc/v1/end_session?"+q.Encode(), http.StatusFound)
 }

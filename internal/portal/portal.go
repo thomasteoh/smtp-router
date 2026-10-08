@@ -277,13 +277,20 @@ func (p *Portal) handleLogout(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
+	// Idempotent logout: if there is no session (already logged out, e.g. the
+	// browser returned here from Zitadel's post_logout_redirect_uri), redirect
+	// to the site root instead of looping back to end_session. Without this the
+	// second /logout call sends an empty id_token_hint, Zitadel rejects it and
+	// bounces to its own UI logout page — "logout doesn't redirect properly".
+	if idHint == "" {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
 	// RP-initiated logout: hit Zitadel's end_session_endpoint with the ID token
 	// and a post-logout redirect back to the portal (which then forces fresh
 	// login via prompt=login).
 	q := url.Values{}
-	if idHint != "" {
-		q.Set("id_token_hint", idHint)
-	}
+	q.Set("id_token_hint", idHint)
 	// post_logout_redirect_uri must point back at the portal's /logout (site
 	// root), not the OIDC /callback. Derive the site base from redirectURL by
 	// stripping the /callback suffix, then append /logout. TrimSuffix is safe

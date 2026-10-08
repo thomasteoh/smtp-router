@@ -71,7 +71,12 @@ type Portal struct {
 // verifier, so the same admin-role claim check applies to the web login.
 func New(cfg Config, verifier Verifier) *Portal {
 	if len(cfg.Scopes) == 0 {
-		cfg.Scopes = []string{"openid", "profile", "email"}
+		// "openid profile email" alone does NOT make Zitadel assert the roles
+		// claim; Zitadel only includes urn:zitadel:iam:org:project:roles when a
+		// role scope is requested (urn:zitadel:iam:org:projects:roles asserts
+		// all the user's grants' roles). Without it the admin-role check fails
+		// and the portal returns "forbidden: admin role required".
+		cfg.Scopes = []string{"openid", "profile", "email", "urn:zitadel:iam:org:projects:roles"}
 	}
 	oc := &oauth2.Config{
 		ClientID:     cfg.ClientID,

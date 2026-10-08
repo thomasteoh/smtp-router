@@ -634,14 +634,10 @@ func (s *Server) gateAdmin(next http.HandlerFunc) http.HandlerFunc {
 			if _, admin, err := s.oidc.VerifyAccess(r.Context(), tok); err == nil && admin {
 				next(w, r)
 				return
-			} else {
-				log.Printf("gateAdmin VerifyAccess: admin=%v err=%v", admin, err)
 			}
 			if _, admin, err := s.oidc.Verify(r.Context(), tok); err == nil && admin {
 				next(w, r)
 				return
-			} else {
-				log.Printf("gateAdmin Verify(id): admin=%v err=%v", admin, err)
 			}
 		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)

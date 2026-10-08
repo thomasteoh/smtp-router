@@ -10,10 +10,11 @@ func TestIndexTemplateRenders(t *testing.T) {
 	src := string(IndexHTML())
 	page := template.Must(template.New("index").Parse(src))
 	data := map[string]any{
-		"Email":   "thomas@awry.com.au",
-		"Name":    "Thomas Teoh",
-		"Roles":   []string{"admin"},
-		"IDToken": "eyJhbGciOiJSUzI1NiJ9.abc.xyz",
+		"Email":       "thomas@awry.com.au",
+		"Name":        "Thomas Teoh",
+		"Roles":       []string{"admin"},
+		"IDToken":     "eyJhbG...NiJ9.abc.xyz",
+		"AccessToken": "eyJhbG...NiJ9.acc.xyz",
 	}
 	var b strings.Builder
 	if err := page.ExecuteTemplate(&b, "index", data); err != nil {
@@ -26,7 +27,10 @@ func TestIndexTemplateRenders(t *testing.T) {
 	if !strings.Contains(out, "smtp-router admin") {
 		t.Fatalf("title not rendered")
 	}
-	if !strings.Contains(out, "eyJhbGciOiJSUzI1NiJ9.abc.xyz") {
+	if !strings.Contains(out, "eyJhbG...NiJ9.acc.xyz") {
+		t.Fatalf("access token not embedded")
+	}
+	if !strings.Contains(out, "eyJhbG...NiJ9.abc.xyz") {
 		t.Fatalf("ID token not embedded")
 	}
 	if !strings.Contains(out, "addProvider") {

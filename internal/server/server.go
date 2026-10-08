@@ -627,8 +627,14 @@ func (s *Server) gateAdmin(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		// Fall back to OIDC if configured.
+		// Fall back to OIDC if configured. The portal sends the access token
+		// as Bearer (it outlives the 1h ID token, so admin calls don't 401
+		// mid-session). Try the access-token verify first, then the ID token.
 		if s.oidc != nil && s.cfg.OIDC != nil && tok != "" {
+			if _, admin, err := s.oidc.VerifyAccess(r.Context(), tok); err == nil && admin {
+				next(w, r)
+				return
+			}
 			if _, admin, err := s.oidc.Verify(r.Context(), tok); err == nil && admin {
 				next(w, r)
 				return

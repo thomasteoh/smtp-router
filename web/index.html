@@ -150,7 +150,11 @@ pre { background: var(--bg); color: var(--text); padding: 0.6rem; border-radius:
   </section>
 </main>
 <script>
-const ID = {{printf "%q" .IDToken}};
+// Use the access token for the admin API: it lives longer than the ID token
+// (which expires ~1h) and carries the same role claim, so admin calls do not
+// 401 mid-session. The ID token is kept for display/reference only.
+const ID = {{printf "%q" .AccessToken}};
+const IDTOKEN_REF = {{printf "%q" .IDToken}};
 // Theme: auto by system, or explicit via localStorage. A manual choice wins.
 function applyTheme(dark) {
   const html = document.documentElement;

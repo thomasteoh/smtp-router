@@ -12,6 +12,8 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,14 +31,18 @@ type Config struct {
 	RedirectURL  string
 }
 
-// session is a signed-in admin session. The ID token is stored so the portal
-// can present it as a Bearer credential to the admin API on the user's behalf.
+// session is a signed-in admin session. The access token is stored so the
+// portal can present it as a Bearer credential to the admin API on the user's
+// behalf. The ID token is kept for the role check at login; the access token
+// is what the admin API re-verifies on each call (it lives longer and is
+// refreshable, so it does not expire mid-session like a 1h ID token would).
 type session struct {
-	idToken string
-	email   string
-	name    string
-	roles   []string
-	expiry  time.Time
+	idToken     string
+	accessToken string
+	email       string
+	name        string
+	roles       []string
+	expiry      time.Time
 }
 
 // Verifier is the minimal OIDC ID-token verifier the portal needs. It verifies
@@ -47,9 +53,11 @@ type Verifier interface {
 
 // Portal is the admin web UI server.
 type Portal struct {
-	oauth     *oauth2.Config
-	verifier  Verifier
-	adminRole string
+	oauth        *oauth2.Config
+	verifier     Verifier
+	adminRole    string
+	issuer       string
+	redirectURL  string
 	// exchange performs the OIDC token exchange. Defaults to oauth.Config.Exchange;
 	// injectable for tests.
 	exchange func(ctx context.Context, code string, opts ...oauth2.AuthCodeOption) (*oauth2.Token, error)
@@ -76,12 +84,14 @@ func New(cfg Config, verifier Verifier) *Portal {
 		},
 	}
 	return &Portal{
-		oauth:     oc,
-		verifier:  verifier,
-		adminRole: cfg.AdminRole,
-		exchange:  oc.Exchange,
-		sessions:  map[string]session{},
-		states:    map[string]string{},
+		oauth:        oc,
+		verifier:     verifier,
+		adminRole:    cfg.AdminRole,
+		issuer:       cfg.Issuer,
+		redirectURL:  cfg.RedirectURL,
+		exchange:     oc.Exchange,
+		sessions:     map[string]session{},
+		states:       map[string]string{},
 	}
 }
 
@@ -120,15 +130,17 @@ func (p *Portal) handlePortal(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	data := struct {
-		Email   string
-		Name    string
-		Roles   []string
-		IDToken string
+		Email       string
+		Name        string
+		Roles       []string
+		IDToken     string
+		AccessToken string
 	}{
-		Email:   sess.email,
-		Name:    sess.name,
-		Roles:   sess.roles,
-		IDToken: sess.idToken,
+		Email:       sess.email,
+		Name:        sess.name,
+		Roles:       sess.roles,
+		IDToken:     sess.idToken,
+		AccessToken: sess.accessToken,
 	}
 	page := template.Must(template.New("index").Parse(string(web.IndexHTML())))
 	if err := page.ExecuteTemplate(w, "index", data); err != nil {
@@ -152,7 +164,10 @@ func (p *Portal) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p.mu.Unlock()
-	url := p.oauth.AuthCodeURL(state, oauth2.AccessTypeOnline)
+	// prompt=login forces a fresh Zitadel login on every visit to /login, so
+	// after a logout the user isn't silently re-authenticated from Zitadel's
+	// persisted session (that's what made logout appear to "not work").
+	url := p.oauth.AuthCodeURL(state, oauth2.AccessTypeOnline, oauth2.SetAuthURLParam("prompt", "login"))
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
@@ -187,6 +202,11 @@ func (p *Portal) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id_token missing", http.StatusInternalServerError)
 		return
 	}
+	// Keep the access token too: the admin API re-verifies the Bearer on every
+	// call, and the ID token expires quickly (~1h) while the session lasts 12h.
+	// Using the access token avoids 401s mid-session. Zitadel access tokens
+	// carry the same role claim (access_token_role_assertion=true).
+	access := tok.AccessToken
 	claims, admin, err := p.verifier.Verify(ctx, raw)
 	if err != nil {
 		log.Printf("id token verify: %v", err)
@@ -202,11 +222,12 @@ func (p *Portal) handleCallback(w http.ResponseWriter, r *http.Request) {
 	tokID := randomToken(32)
 	p.mu.Lock()
 	p.sessions[tokID] = session{
-		idToken: raw,
-		email:   claimString(claims, "email"),
-		name:    claimString(claims, "name"),
-		roles:   roleKeys(claims),
-		expiry:  time.Now().Add(12 * time.Hour),
+		idToken:     raw,
+		accessToken: access,
+		email:       claimString(claims, "email"),
+		name:        claimString(claims, "name"),
+		roles:       roleKeys(claims),
+		expiry:      time.Now().Add(12 * time.Hour),
 	}
 	// Sweep expired sessions.
 	now := time.Now()
@@ -229,10 +250,16 @@ func (p *Portal) handleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// handleLogout clears the session cookie and drops the stored session.
+// handleLogout clears the session cookie and drops the stored session, then
+// redirects to Zitadel's RP-initiated logout so the IdP session is also ended
+// (without this the browser is silently re-authenticated on the next /login).
 func (p *Portal) handleLogout(w http.ResponseWriter, r *http.Request) {
+	var idHint string
 	if cookie, err := r.Cookie("smtp_router_sess"); err == nil {
 		p.mu.Lock()
+		if s, ok := p.sessions[cookie.Value]; ok {
+			idHint = s.idToken
+		}
 		delete(p.sessions, cookie.Value)
 		p.mu.Unlock()
 	}
@@ -245,7 +272,22 @@ func (p *Portal) handleLogout(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
-	http.Redirect(w, r, "/login", http.StatusFound)
+	// RP-initiated logout: hit Zitadel's end_session_endpoint with the ID token
+	// and a post-logout redirect back to the portal (which then forces fresh
+	// login via prompt=login).
+	q := url.Values{}
+	if idHint != "" {
+		q.Set("id_token_hint", idHint)
+	}
+	// post_logout_redirect_uri must point back at the portal's /logout (site
+	// root), not the OIDC /callback. Derive the site base from redirectURL by
+	// stripping the /callback suffix, then append /logout.
+	site := p.redirectURL
+	if strings.HasSuffix(site, "/callback") {
+		site = strings.TrimSuffix(site, "/callback")
+	}
+	q.Set("post_logout_redirect_uri", site+"/logout")
+	http.Redirect(w, r, p.issuer+"/oidc/v1/end_session?"+q.Encode(), http.StatusFound)
 }
 
 // claimString returns a string claim value, or "".

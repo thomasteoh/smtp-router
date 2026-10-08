@@ -57,6 +57,34 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (claims map[string]an
 	return c, admin, nil
 }
 
+// VerifyAccess checks an access token (not an ID token) and returns the claims
+// and whether it carries the admin role. Zitadel access tokens carry the same
+// role claim (urn:zitadel:iam:org:project:roles) but have a different audience
+// (the client_id is not the aud), so the strict ID-token verifier rejects them.
+// This verifies signature + issuer + expiry via the provider's key set, then
+// checks the role claim directly. Used for the portal's Bearer credential,
+// which must survive a 12h session without the 1h ID-token expiry.
+func (v *Verifier) VerifyAccess(ctx context.Context, raw string) (claims map[string]any, admin bool, err error) {
+	p, err := v.provider(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	// Skip the client-ID audience check: Zitadel access tokens carry a
+	// resource/API audience, not the client_id. Signature, issuer and expiry
+	// are still verified via the provider key set. The role claim then gates.
+	verifier := p.Verifier(&oidc.Config{SkipClientIDCheck: true})
+	idTok, err := verifier.Verify(ctx, raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("verify access token: %w", err)
+	}
+	var c map[string]any
+	if err := idTok.Claims(&c); err != nil {
+		return nil, false, fmt.Errorf("read claims: %w", err)
+	}
+	admin = hasRole(c, v.cfg.AdminRole)
+	return c, admin, nil
+}
+
 // provider lazily initialises the OIDC provider, caching on success.
 func (v *Verifier) provider(ctx context.Context) (*oidc.Provider, error) {
 	v.mu.Lock()

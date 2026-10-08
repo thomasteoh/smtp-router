@@ -57,7 +57,7 @@
     "issuer": "https://auth.harmonicr.com",
     "client_id": "smtp-router-oidc-client",
     "client_secret": "oidc-client-secret",
-    "scopes": ["openid", "profile", "email"],
+    "scopes": ["openid", "profile", "email", "urn:zitadel:iam:org:projects:roles"],
     "admin_role": "mail-admin",
     "redirect_url": "https://smtp.harmonicr.com/callback"
   },

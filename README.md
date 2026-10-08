@@ -91,20 +91,30 @@ The router also serves an OIDC Connect admin web console (no separate
 service) at the site root. Visit `https://smtp.harmonicr.com/`:
 
 - `GET /` renders the embedded HTML console (redirects to `/login` when no
-  session), which calls the token-gated admin API using the session's ID token
-  as a Bearer credential.
-- `GET /login` redirects to Zitadel authorize (OIDC authorization-code flow).
+  session), which calls the token-gated admin API using the session's **access
+  token** as a Bearer credential (the ID token is used only for login/session;
+  the admin API re-verifies the JWT access token on every call).
+- `GET /login` redirects to Zitadel authorize (OIDC authorization-code flow)
+  with `prompt=login` so a fresh login is always forced.
 - `GET /callback` exchanges the code, verifies the ID token via the router's
   OIDC verifier, checks the `admin` role, and sets a session cookie
-  (`smtp_router_sess`, HttpOnly/Secure, 12h).
-- `GET /logout` clears the session.
+  (`smtp_router_sess`, HttpOnly/Secure, 12h); stores both ID + access token.
+- `GET /logout` clears the session, then RP-initiated logout to Zitadel
+  `/oidc/v1/end_session` (with `id_token_hint` + registered
+  `post_logout_redirect_uri=https://smtp.harmonicr.com/logout`), so the IdP
+  session is ended too. `/logout` is **idempotent**: with no session it
+  redirects to `/` instead of looping back to `end_session` (which would
+  bounce to Zitadel's own UI logout page).
 
 The web UI lives at the repo root in `web/` (`web/web.go` embeds
 `web/index.html`; the portal package imports `web` and serves it). The console
 manages providers, accounts, clients (API keys), allow/deny rules, and shows
-audit + usage. The OIDC app must have role assertions enabled (the
-`admin` role key must ride the ID token) and the user must hold the `admin`
-role on the internal project.
+audit + usage. The OIDC app must have role assertions enabled, the client must
+request the **roles scope** (`urn:zitadel:iam:org:projects:roles` — Zitadel
+only asserts `urn:zitadel:iam:org:project:roles` when a role scope is
+requested), the app's access token type must be **JWT** (an opaque bearer
+token fails the JWT verifier), and the user must hold the `admin` role on the
+internal project.
 
 ## Async send queue
 

@@ -465,6 +465,37 @@ func TestAdminListAndDelete(t *testing.T) {
 	}
 }
 
+// TestAdminListRulesEmpty ensures /admin/rules returns empty JSON arrays
+// (not null) when no allow/deny rules are configured. A null response breaks
+// the frontend (r.deny.length throws "Cannot read properties of null").
+func TestAdminListRulesEmpty(t *testing.T) {
+	cfg := &config.Config{AdminToken: "tok"}
+	au := auth.New()
+	ad, _ := audit.Open(":memory:")
+	defer ad.Close()
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	s, _ := New(cfg, au, ad, lim, rl, webhook.New(nil), &oidc.Verifier{})
+	s.SetConfigPath(t.TempDir() + "/cfg.json")
+	h := s.Handler()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/admin/rules", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("list rules status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	// Must contain explicit empty arrays, not null.
+	if strings.Contains(body, `"allow":null`) || strings.Contains(body, `"deny":null`) {
+		t.Fatalf("rules response has null slice: %s", body)
+	}
+	if !strings.Contains(body, `"allow":[]`) || !strings.Contains(body, `"deny":[]`) {
+		t.Fatalf("rules response missing empty arrays: %s", body)
+	}
+}
+
 func TestSendUnauthorized(t *testing.T) {
 	cfg := &config.Config{Allowlist: []string{"*@harmonicr.com"}}
 	au := auth.New()

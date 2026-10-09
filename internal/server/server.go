@@ -860,8 +860,8 @@ func (s *Server) adminDeleteClient(w http.ResponseWriter, r *http.Request) {
 // adminListRules lists the allowlist and denylist (admin).
 func (s *Server) adminListRules(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	allow := append([]string(nil), s.cfg.Allowlist...)
-	deny := append([]string(nil), s.cfg.Denylist...)
+	allow := append([]string{}, s.cfg.Allowlist...)
+	deny := append([]string{}, s.cfg.Denylist...)
 	s.mu.RUnlock()
 	writeJSON(w, http.StatusOK, map[string]any{"allow": allow, "deny": deny})
 }

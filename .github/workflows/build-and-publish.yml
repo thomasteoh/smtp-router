@@ -9,7 +9,7 @@ on:
 env:
   IMAGE: ghcr.io/thomasteoh/smtp-router
   # Pin a patch release that fixes known stdlib CVEs (see govulncheck).
-  GO_VERSION: "1.26.6"
+  GO_VERSION: "1.26.9"
 
 jobs:
   test:

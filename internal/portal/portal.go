@@ -138,13 +138,11 @@ func (p *Portal) handlePortal(w http.ResponseWriter, r *http.Request) {
 		Email       string
 		Name        string
 		Roles       []string
-		IDToken     string
 		AccessToken string
 	}{
 		Email:       sess.email,
 		Name:        sess.name,
 		Roles:       sess.roles,
-		IDToken:     sess.idToken,
 		AccessToken: sess.accessToken,
 	}
 	page := template.Must(template.New("index").Parse(string(web.IndexHTML())))

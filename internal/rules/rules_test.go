@@ -28,16 +28,22 @@ func TestDenyList(t *testing.T) {
 func TestExactAllow(t *testing.T) {
 	r := New([]string{"alerts@harmonicr.com"}, nil)
 	if err := r.Check("alerts@harmonicr.com"); err != nil {
-		t.Fatalf("exact allow should pass: %v", err)
+		t.Fatalf("should allow exact: %v", err)
 	}
 	if err := r.Check("other@harmonicr.com"); err == nil {
-		t.Fatal("exact allow should reject other addresses")
+		t.Fatal("should deny non-listed address")
 	}
 }
 
-func TestEmptyAllowAllows(t *testing.T) {
+// TestFailClosedEmptyAllowlist verifies an empty allowlist denies everything
+// (the router must not become an open relay when no allow rules are set).
+func TestFailClosedEmptyAllowlist(t *testing.T) {
 	r := New(nil, nil)
-	if err := r.Check("anything@example.com"); err != nil {
-		t.Fatalf("empty allowlist should allow all: %v", err)
+	if err := r.Check("alerts@harmonicr.com"); err == nil {
+		t.Fatal("empty allowlist must deny all senders (fail closed)")
+	}
+	r = New([]string{}, nil)
+	if err := r.Check("alerts@harmonicr.com"); err == nil {
+		t.Fatal("empty allowlist must deny all senders (fail closed)")
 	}
 }

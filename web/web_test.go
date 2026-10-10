@@ -13,7 +13,6 @@ func TestIndexTemplateRenders(t *testing.T) {
 		"Email":       "thomas@awry.com.au",
 		"Name":        "Thomas Teoh",
 		"Roles":       []string{"admin"},
-		"IDToken":     "eyJhbG...NiJ9.abc.xyz",
 		"AccessToken": "eyJhbG...NiJ9.acc.xyz",
 	}
 	var b strings.Builder
@@ -30,8 +29,8 @@ func TestIndexTemplateRenders(t *testing.T) {
 	if !strings.Contains(out, "eyJhbG...NiJ9.acc.xyz") {
 		t.Fatalf("access token not embedded")
 	}
-	if !strings.Contains(out, "eyJhbG...NiJ9.abc.xyz") {
-		t.Fatalf("ID token not embedded")
+	if strings.Contains(out, "IDTOKEN_REF") {
+		t.Fatalf("ID token reference must not be embedded")
 	}
 	if !strings.Contains(out, "addProvider") {
 		t.Fatalf("script missing")

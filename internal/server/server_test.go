@@ -602,3 +602,25 @@ func TestAdminQueueStatsAndCancel(t *testing.T) {
 		t.Fatalf("dead = %d, want 1", n)
 	}
 }
+
+// TestAdminDeleteRuleQueryParam verifies a bodyless DELETE /admin/rules with
+// query params (what the web console sends) removes a rule and persists.
+func TestAdminDeleteRuleQueryParam(t *testing.T) {
+	cfg := &config.Config{
+		Providers:  []config.Provider{{Name: "smtp", Type: "smtp", Host: "x", Port: 25}},
+		Accounts:   map[string]config.Account{"a@x.com": {From: "a@x.com", Provider: "smtp"}},
+		AdminToken: "secret",
+		Allowlist:  []string{"a@x.com", "b@x.com"},
+	}
+	s, _, _ := newTestServer(t, cfg)
+	req := httptest.NewRequest("DELETE", "/admin/rules?action=allow&rule=a%40x.com", nil)
+	req.Header.Set("Authorization", "Bearer admin-secret")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("DELETE /admin/rules?action=... status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if len(s.cfg.Allowlist) != 1 || s.cfg.Allowlist[0] != "b@x.com" {
+		t.Fatalf("allowlist after delete = %v, want [b@x.com]", s.cfg.Allowlist)
+	}
+}

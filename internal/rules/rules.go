@@ -23,7 +23,7 @@ func New(allow, deny []string) *Rules {
 // when the sender is denied or not allowed.
 func (r *Rules) Check(from string) error {
 	if r == nil {
-		return nil
+		return fmt.Errorf("rules unavailable")
 	}
 	f := strings.ToLower(strings.TrimSpace(from))
 	for _, d := range r.Deny {
@@ -31,8 +31,10 @@ func (r *Rules) Check(from string) error {
 			return fmt.Errorf("sender %q is denied", from)
 		}
 	}
+	// Fail closed: with no allowlist entries nothing may send. An empty
+	// allowlist must not become an open relay.
 	if len(r.Allow) == 0 {
-		return nil
+		return fmt.Errorf("sender %q is not allowed (empty allowlist)", from)
 	}
 	for _, a := range r.Allow {
 		if match(f, a) {

@@ -154,7 +154,6 @@ pre { background: var(--bg); color: var(--text); padding: 0.6rem; border-radius:
 // (which expires ~1h) and carries the same role claim, so admin calls do not
 // 401 mid-session. The ID token is kept for display/reference only.
 const ID = {{.AccessToken}};
-const IDTOKEN_REF = {{.IDToken}};
 // Theme: auto by system, or explicit via localStorage. A manual choice wins.
 function applyTheme(dark) {
   const html = document.documentElement;
@@ -179,7 +178,6 @@ function msg(txt, ok) {
   el.className = 'msg ' + (ok ? 'ok' : 'err');
   el.textContent = txt;
 }
-function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function cell(v) { const td = document.createElement('td'); td.textContent = v ?? ''; return td; }
 function delBtn(path, name, cb) {
   const b = document.createElement('button'); b.className = 'danger'; b.textContent = 'remove';
@@ -211,8 +209,8 @@ async function loadRules() {
   document.getElementById('denyCount').textContent = r.deny.length + ' deny';
   const tb = document.getElementById('rulesTable').querySelector('tbody');
   tb.innerHTML = '';
-  for (const rule of r.allow) { const tr = document.createElement('tr'); tr.append(cell('allow'), cell(rule), delBtn('/admin/rules', rule, loadRules)); tb.appendChild(tr); }
-  for (const rule of r.deny) { const tr = document.createElement('tr'); tr.append(cell('deny'), cell(rule), delBtn('/admin/rules', rule, loadRules)); tb.appendChild(tr); }
+  for (const rule of r.allow) { const tr = document.createElement('tr'); tr.append(cell('allow'), cell(rule), delBtn('/admin/rules?action=allow&rule=' + encodeURIComponent(rule), rule, loadRules)); tb.appendChild(tr); }
+  for (const rule of r.deny) { const tr = document.createElement('tr'); tr.append(cell('deny'), cell(rule), delBtn('/admin/rules?action=deny&rule=' + encodeURIComponent(rule), rule, loadRules)); tb.appendChild(tr); }
 }
 async function loadProviders() {
   const tb = document.getElementById('provTable').querySelector('tbody');
@@ -261,8 +259,10 @@ async function loadAudit() {
 async function loadAll() {
   const out = document.getElementById('statusOut');
   out.textContent = 'loading...';
-  try { await Promise.all([loadUsage(), loadRules(), loadProviders(), loadAccounts(), loadClients(), loadAudit()]); out.textContent = 'ok'; }
-  catch (e) { out.textContent = e.message; }
+  try {
+    await Promise.allSettled([loadUsage(), loadRules(), loadProviders(), loadAccounts(), loadClients(), loadAudit()]);
+    out.textContent = 'ok';
+  } catch (e) { out.textContent = e.message; }
 }
 async function addProvider() {
   const b = { name: document.getElementById('pName').value.trim(), type: document.getElementById('pType').value, host: document.getElementById('pHost').value.trim(), port: +document.getElementById('pPort').value || 0, auth: document.getElementById('pAuth').value, url: document.getElementById('pUrl').value.trim(), tls: document.getElementById('pTls').checked, starttls: document.getElementById('pStartTls').checked };

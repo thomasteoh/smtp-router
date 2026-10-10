@@ -867,14 +867,18 @@ func (s *Server) adminListRules(w http.ResponseWriter, r *http.Request) {
 }
 
 // adminDeleteRule removes an allowlist or denylist entry (admin) and persists.
+// It accepts the action+rule either as a JSON body or as query params
+// (?action=allow&rule=...), so the frontend's bodyless DELETE works.
 func (s *Server) adminDeleteRule(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action string `json:"action"` // "allow" or "deny"
 		Rule   string `json:"rule"`
 	}
+	// Prefer the body; fall back to query params (the web console sends a
+	// bodyless DELETE, so query params are the reliable path).
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
+		req.Action = r.URL.Query().Get("action")
+		req.Rule = r.URL.Query().Get("rule")
 	}
 	if req.Rule == "" || (req.Action != "allow" && req.Action != "deny") {
 		http.Error(w, "action (allow|deny) and rule required", http.StatusBadRequest)

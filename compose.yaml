@@ -14,9 +14,11 @@ services:
       SMTP_ROUTER_DEFAULT_MONTH: ${SMTP_ROUTER_DEFAULT_MONTH}
     volumes:
       # Config dir is writable so admin mutations (add-provider/account/client,
-      # add-rule) can persist via Config.Save back to config.json.
-      - /opt/smtp-router:/opt/smtp-router:rw
-      - smtp-router-data:/opt/smtp-router-data
+      # add-rule) can persist via Config.Save back to config.json. :Z relabels
+      # the bind mount for the container's SELinux context (container_t can
+      # write container_file_t; without :Z the usr_t context denies writes).
+      - /opt/smtp-router:/opt/smtp-router:rw,Z
+      - smtp-router-data:/opt/smtp-router-data:Z
     ports:
       # Under host networking, ports is ignored; the router binds :52150 on the
       # host. Caddy terminates TLS at smtp.harmonicr.com and proxies here.

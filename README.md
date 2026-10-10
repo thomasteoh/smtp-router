@@ -180,6 +180,10 @@ by a `deploy`-user systemd unit:
 
 - Config bind-mounted **rw** at `/opt/smtp-router` so admin mutations
   (add-provider/account/client, add-rule) persist back to `config.json`.
+  The mount uses `:Z` (SELinux relabel): the container runs `container_t` and
+  can only write `container_file_t`; without `:Z` the host `usr_t` context
+  denies writes and `persistConfig` fails with `permission denied`, so admin
+  mutations silently stay in memory and are lost on restart.
 - Data volume `smtp-router-data` at `/opt/smtp-router-data` holds the SQLite DB
   (audit + usage + providers/accounts/clients), so it survives container
   recreation.

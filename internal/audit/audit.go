@@ -91,6 +91,9 @@ func (s *Store) List(n int) ([]Row, error) {
 		}
 		out = append(out, r)
 	}
+	if out == nil {
+		out = []Row{} // emit [] not null (frontend iterates the response)
+	}
 	return out, rows.Err()
 }
 

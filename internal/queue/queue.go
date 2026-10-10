@@ -511,8 +511,20 @@ func (p *Pool) List(limit int, status string) ([]Job, error) {
 	return p.store.List(limit, status)
 }
 
-// Enqueue submits a job to the store and returns its id.
+// Enqueue submits a job to the store and returns its id. It enforces the
+// pool's MaxSize (0 = unlimited): once queued+running jobs reach the cap,
+// further jobs are rejected with a clear error so the backlog can't grow
+// unbounded.
 func (p *Pool) Enqueue(j Job) (int64, error) {
+	if p.cfg.MaxSize > 0 {
+		depth, err := p.Depth()
+		if err != nil {
+			return 0, fmt.Errorf("queue depth: %w", err)
+		}
+		if depth >= p.cfg.MaxSize {
+			return 0, fmt.Errorf("queue full (max_size %d, depth %d)", p.cfg.MaxSize, depth)
+		}
+	}
 	return p.store.Enqueue(j)
 }
 

@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -314,5 +315,29 @@ func TestPoolStats(t *testing.T) {
 	}
 	if st.Queued != 1 || st.Workers != 2 || st.MaxRetries != 4 {
 		t.Fatalf("stats = %+v", st)
+	}
+}
+
+// TestPoolEnqueueMaxSize verifies the pool rejects jobs once queued+running
+// depth reaches MaxSize (0 = unlimited). The backlog must not grow unbounded.
+func TestPoolEnqueueMaxSize(t *testing.T) {
+	s := mkStore(t)
+	defer s.Close()
+	p := NewPool(s, Config{MaxSize: 2}, func(ctx context.Context, j Job) (string, error) { return "smtp", nil })
+	if _, err := p.Enqueue(Job{Client: "c", From: "a@h.com", To: []string{"b@h.com"}}); err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	if _, err := p.Enqueue(Job{Client: "c", From: "a@h.com", To: []string{"b@h.com"}}); err != nil {
+		t.Fatalf("second enqueue: %v", err)
+	}
+	if _, err := p.Enqueue(Job{Client: "c", From: "a@h.com", To: []string{"b@h.com"}}); err == nil {
+		t.Fatal("third enqueue should be rejected when MaxSize=2")
+	} else if !strings.Contains(err.Error(), "queue full") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// MaxSize 0 = unlimited.
+	p0 := NewPool(s, Config{MaxSize: 0}, func(ctx context.Context, j Job) (string, error) { return "smtp", nil })
+	if _, err := p0.Enqueue(Job{Client: "c", From: "a@h.com", To: []string{"b@h.com"}}); err != nil {
+		t.Fatalf("MaxSize=0 should be unlimited: %v", err)
 	}
 }

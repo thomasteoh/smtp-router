@@ -175,8 +175,8 @@ Built as a container image via GitHub Actions → **GHCR**
 under Podman. See `.github/workflows/build-and-publish.yml`.
 
 The production deployment uses the repo's `compose.yaml` (rootless Podman
-compose, host networking, `userns_mode: keep-id:uid=10001,gid=10001`) managed
-by a `deploy`-user systemd unit:
+compose, joined to the shared `zitadel` bridge network, `userns_mode:
+keep-id:uid=10001,gid=10001`) managed by a `deploy`-user systemd unit:
 
 - Config bind-mounted **rw** at `/opt/smtp-router` so admin mutations
   (add-provider/account/client, add-rule) persist back to `config.json`.
@@ -187,8 +187,19 @@ by a `deploy`-user systemd unit:
 - Data volume `smtp-router-data` at `/opt/smtp-router-data` holds the SQLite DB
   (audit + usage + providers/accounts/clients), so it survives container
   recreation.
-- Caddy terminates TLS at `smtp.harmonicr.com` and reverse-proxies to
-  `127.0.0.1:52150`; the router binds `:52150` under host networking.
+- **Networking**: the router joins the shared `zitadel` bridge network
+  (`external: true`) so downstream bridge-mode apps (Zulip, Zitadel,
+  Vaultwarden, Wiki.js) can reach the SMTP relay by container name
+  (`smtp-router:52151`). It is no longer host-networked; OIDC discovery +
+  token verification hit `auth.harmonicr.com`, which is hairpin-blocked from
+  the bridge, so `extra_hosts` routes it through the `caddy-tls` container
+  (`10.89.2.193`) on the same network.
+- **Two listeners**: `:52150` is the HTTP JSON API (Caddy terminates TLS at
+  `smtp.harmonicr.com` and reverse-proxies to `smtp-router:52150`);
+  `:52151` is the SMTP-protocol relay. Downstream apps authenticate with SMTP
+  AUTH using their client key (username = client name, password = API key) and
+  relay mail through the same rules/rate-limit/provider/audit/webhook pipeline
+  as `/send`. The relay is fail-closed (AUTH required before `MAIL FROM`).
 - The systemd user unit (`podman-compose-smtp-router.service`) runs
   `podman-compose up -d --no-build` on boot and is enabled (symlinked into
   `default.target.wants`); `deploy` has linger enabled so the unit runs without
@@ -206,6 +217,31 @@ podman-compose -f /opt/smtp-router/compose.yaml up -d --force-recreate
 > **Note**: `podman restart smtp-router` does **not** pick up a freshly pulled
 > `:latest` (it reuses the image the container was created from). Always use
 > `podman-compose up -d --force-recreate` after a pull.
+
+## SMTP relay
+
+Downstream apps that speak the SMTP protocol (Zulip, Zitadel, Vaultwarden,
+Wiki.js) relay through the router instead of calling the HTTP JSON API. The
+relay listens on `:52151` and uses the **same per-client credentials** as
+`/send`: the SMTP AUTH username is the client name, the password is the
+client's API key.
+
+Configure each app with:
+
+```
+SMTP host: smtp-router          (internal bridge apps, on the zitadel network)
+          smtp.harmonicr.com    (external/public apps)
+SMTP port: 52151
+SMTP username: <client name>   (e.g. zulip, zitadel, vaultwarden, wikijs)
+SMTP password: <client API key>
+STARTTLS: optional (the relay does not require TLS; use it if the app insists)
+```
+
+The relay is **fail-closed**: `AUTH` is required before `MAIL FROM`; there is
+no open relay. Every message is routed through the same sender allow/deny
+rules, per-account rate limits, upstream provider selection, audit log and
+webhooks as `POST /send` — so a client's SMTP traffic is governed by exactly
+the same policy as its HTTP traffic.
 
 ## Security
 

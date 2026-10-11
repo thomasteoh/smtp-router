@@ -4,7 +4,9 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +26,7 @@ import (
 	"github.com/thomasteoh/smtp-router/internal/queue"
 	"github.com/thomasteoh/smtp-router/internal/ratelimit"
 	"github.com/thomasteoh/smtp-router/internal/rules"
+	"github.com/thomasteoh/smtp-router/internal/smtprelay"
 	"github.com/thomasteoh/smtp-router/internal/webhook"
 )
 
@@ -277,21 +280,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve account + rate limits (read-only config access under RLock).
+	// Account must exist for both paths (fail fast before enqueue/deliver).
 	s.mu.RLock()
 	acc, ok := s.cfg.LookupAccount(req.From)
-	var provName string
-	var sender provider.Sender
-	if ok {
-		provName, sender = s.resolveProviderLocked(req.From, acc, req.Provider)
-	}
 	s.mu.RUnlock()
 	if !ok {
 		http.Error(w, "account not configured", http.StatusForbidden)
-		return
-	}
-	if provName == "" || sender == nil {
-		http.Error(w, "unknown provider", http.StatusBadRequest)
 		return
 	}
 
@@ -299,6 +293,15 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	// accepted. Rate limiting is enforced at delivery time by the worker, so
 	// a burst is queued rather than rejected. The client gets a job id.
 	if s.queue != nil {
+		// Resolve the provider once here (the worker re-resolves at delivery
+		// time, but we need a valid provider to accept the job).
+		s.mu.RLock()
+		provName, sender := s.resolveProviderLocked(req.From, acc, req.Provider)
+		s.mu.RUnlock()
+		if provName == "" || sender == nil {
+			http.Error(w, "unknown provider", http.StatusBadRequest)
+			return
+		}
 		s.queued.Add(1)
 		job := queue.Job{
 			RequestID:   req.RequestID,
@@ -335,61 +338,11 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dayLimit, monthLimit := acc.Rate.Day, acc.Rate.Month
-	if dayLimit == 0 && monthLimit == 0 {
-		dayLimit, monthLimit = s.cfg.DefaultRate.Day, s.cfg.DefaultRate.Month
-	}
-
-	// Rate limit (day + month).
-	if !s.limit.Allow(req.From, dayLimit, monthLimit) {
-		s.rateLimit.Add(1)
-		s.record(client, req, audit.StatusRateLimited, "", req.RequestID)
-		if s.hook != nil {
-			s.hook.Fire(r.Context(), webhook.EventRateLimited, map[string]any{
-				"client": client, "from": req.From, "provider": provName,
-			})
-		}
-		writeJSON(w, http.StatusTooManyRequests, SendResult{Status: audit.StatusRateLimited})
-		return
-	}
-
-	// Deliver.
-	msg := provider.Message{
-		From:    req.From,
-		To:      req.To,
-		Subject: req.Subject,
-		Body:    req.Body,
-		HTML:    req.HTML,
-	}
-	for _, a := range req.Attachments {
-		msg.Attachments = append(msg.Attachments, provider.Attachment{
-			Filename:    a.Filename,
-			ContentType: a.ContentType,
-			ContentB64:  a.ContentB64,
-		})
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-	if err := sender.Deliver(ctx, msg); err != nil {
-		s.errors.Add(1)
-		s.record(client, req, audit.StatusError, err.Error(), req.RequestID)
-		if s.hook != nil {
-			s.hook.Fire(r.Context(), webhook.EventError, map[string]any{
-				"client": client, "from": req.From, "provider": provName, "error": err.Error(),
-			})
-		}
-		writeJSON(w, http.StatusInternalServerError, SendResult{Status: audit.StatusError, Provider: provName, Error: err.Error()})
-		return
-	}
-
-	s.delivered.Add(1)
-	s.record(client, req, audit.StatusDelivered, "", req.RequestID)
-	if s.hook != nil {
-		s.hook.Fire(r.Context(), webhook.EventDelivered, map[string]any{
-			"client": client, "from": req.From, "provider": provName,
-		})
-	}
-	writeJSON(w, http.StatusOK, SendResult{Status: audit.StatusDelivered, Provider: provName})
+	// Sync path: delegate to the shared pipeline so HTTP and SMTP behave
+	// identically. s.deliver re-checks rules + account and returns an
+	// HTTP-style code, the status constant, the provider and an error message.
+	status, provName, errMsg, code := s.deliver(r.Context(), client, req)
+	writeJSON(w, code, SendResult{Status: status, Provider: provName, Error: errMsg})
 }
 
 // DeliverJob delivers a queued job through its provider, enforcing rate
@@ -455,6 +408,148 @@ func (s *Server) DeliverJob(ctx context.Context, job queue.Job) (string, error) 
 		})
 	}
 	return provName, nil
+}
+
+// Validate validates an SMTP AUTH user/pass pair against the client
+// store. It satisfies smtprelay.Authenticator: username = client name,
+// password = the client's raw API key. Returns the client name or "".
+func (s *Server) Validate(user, pass string) string {
+	return s.auth.ValidateUserPass(user, pass)
+}
+
+// Deliver delivers a fully-parsed SMTP message on behalf of an
+// authenticated client. It satisfies smtprelay.Deliverer. The SMTP path uses
+// the exact same rules / rate-limit / provider / audit / webhook pipeline as
+// the HTTP /send path. It returns an SMTP-style status code (250 success,
+// 550 refused, 451 temporary) and a message for the client.
+func (s *Server) Deliver(ctx context.Context, client string, msg smtprelay.RelayMessage) (int, string) {
+	req := SendRequest{
+		RequestID: "smtp-" + randID(),
+		From:      msg.From,
+		To:        msg.To,
+		Subject:   msg.Subject,
+		Body:      msg.Body,
+		// SMTP has no HTML part; the body is the plain text.
+		Provider: "",
+	}
+	// Reuse the shared synchronous pipeline. The SMTP path never uses the
+	// async queue (a client is waiting on the wire), so we force the sync
+	// path regardless of queue config.
+	status, _, errMsg, _ := s.deliver(ctx, client, req)
+	if status == "" {
+		status = audit.StatusError
+	}
+	switch status {
+	case audit.StatusDelivered:
+		return 250, "Message accepted for delivery"
+	case audit.StatusDenied:
+		return 550, errMsg
+	case audit.StatusRateLimited:
+		return 451, "Temporarily rate limited"
+	default:
+		return 451, errMsg
+	}
+}
+
+// deliver is the shared synchronous send pipeline used by both the HTTP
+// /send path and the SMTP relay path. It validates rules, resolves the
+// account + provider, enforces rate limits, delivers, and records audit +
+// webhooks. It returns the status constant, the provider name, an error
+// message (empty on success), and an HTTP-style status code.
+func (s *Server) deliver(ctx context.Context, client string, req SendRequest) (status, provName, errMsg string, code int) {
+	// Sender rules (allow/deny).
+	if err := s.rules.Check(req.From); err != nil {
+		s.denied.Add(1)
+		s.record(client, req, audit.StatusDenied, "", req.RequestID)
+		if s.hook != nil {
+			s.hook.Fire(ctx, webhook.EventDenied, map[string]any{
+				"client": client, "from": req.From, "error": err.Error(),
+			})
+		}
+		return audit.StatusDenied, "", err.Error(), http.StatusForbidden
+	}
+
+	// Resolve account + provider (read-only config access under RLock).
+	s.mu.RLock()
+	acc, ok := s.cfg.LookupAccount(req.From)
+	var sender provider.Sender
+	if ok {
+		provName, sender = s.resolveProviderLocked(req.From, acc, req.Provider)
+	}
+	s.mu.RUnlock()
+	if !ok {
+		s.record(client, req, audit.StatusDenied, "", req.RequestID)
+		if s.hook != nil {
+			s.hook.Fire(ctx, webhook.EventDenied, map[string]any{
+				"client": client, "from": req.From, "error": "account not configured",
+			})
+		}
+		return audit.StatusDenied, "", "account not configured", http.StatusForbidden
+	}
+	if provName == "" || sender == nil {
+		s.record(client, req, audit.StatusError, "unknown provider", req.RequestID)
+		if s.hook != nil {
+			s.hook.Fire(ctx, webhook.EventError, map[string]any{
+				"client": client, "from": req.From, "provider": provName, "error": "unknown provider",
+			})
+		}
+		return audit.StatusError, provName, "unknown provider", http.StatusBadRequest
+	}
+
+	// Rate limit (day + month).
+	dayLimit, monthLimit := acc.Rate.Day, acc.Rate.Month
+	if dayLimit == 0 && monthLimit == 0 {
+		dayLimit, monthLimit = s.cfg.DefaultRate.Day, s.cfg.DefaultRate.Month
+	}
+	if !s.limit.Allow(req.From, dayLimit, monthLimit) {
+		s.rateLimit.Add(1)
+		s.record(client, req, audit.StatusRateLimited, "", req.RequestID)
+		if s.hook != nil {
+			s.hook.Fire(ctx, webhook.EventRateLimited, map[string]any{
+				"client": client, "from": req.From, "provider": provName,
+			})
+		}
+		return audit.StatusRateLimited, provName, "rate limited", http.StatusTooManyRequests
+	}
+
+	// Build the provider message.
+	msg := provider.Message{
+		From:    req.From,
+		To:      req.To,
+		Subject: req.Subject,
+		Body:    req.Body,
+		HTML:    req.HTML,
+	}
+	for _, a := range req.Attachments {
+		msg.Attachments = append(msg.Attachments, provider.Attachment{
+			Filename:    a.Filename,
+			ContentType: a.ContentType,
+			ContentB64:  a.ContentB64,
+		})
+	}
+
+	// Deliver.
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	if err := sender.Deliver(ctx, msg); err != nil {
+		s.errors.Add(1)
+		s.record(client, req, audit.StatusError, err.Error(), req.RequestID)
+		if s.hook != nil {
+			s.hook.Fire(ctx, webhook.EventError, map[string]any{
+				"client": client, "from": req.From, "provider": provName, "error": err.Error(),
+			})
+		}
+		return audit.StatusError, provName, err.Error(), http.StatusInternalServerError
+	}
+
+	s.delivered.Add(1)
+	s.record(client, req, audit.StatusDelivered, "", req.RequestID)
+	if s.hook != nil {
+		s.hook.Fire(ctx, webhook.EventDelivered, map[string]any{
+			"client": client, "from": req.From, "provider": provName,
+		})
+	}
+	return audit.StatusDelivered, provName, "", http.StatusOK
 }
 
 // jobToSendRequest converts a queued job back to a SendRequest for audit.
@@ -956,4 +1051,12 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// randID returns a short random hex ID (for SMTP-sourced requests that carry
+// no client-supplied request_id).
+func randID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

@@ -17,11 +17,14 @@ import (
 	"github.com/thomasteoh/smtp-router/internal/ratelimit"
 	"github.com/thomasteoh/smtp-router/internal/rules"
 	"github.com/thomasteoh/smtp-router/internal/server"
+	"github.com/thomasteoh/smtp-router/internal/smtprelay"
 	"github.com/thomasteoh/smtp-router/internal/webhook"
 )
 
-// Serve runs the HTTP API server.
-func Serve(cfgPath, addr, dbPath string) error {
+// Serve runs the HTTP API server and, when a relay address is provided, the
+// SMTP-protocol relay listener. Both share the same client keys, rules,
+// rate limits, providers, audit store and webhooks.
+func Serve(cfgPath, addr, smtpAddr, dbPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -116,6 +119,29 @@ func Serve(cfgPath, addr, dbPath string) error {
 			AdminRole:    cfg.OIDC.AdminRole,
 			RedirectURL:  cfg.OIDC.RedirectURL,
 		}, ov))
+	}
+
+	// SMTP-protocol relay listener. When smtpAddr is set, downstream apps
+	// (Zulip, Zitadel, Vaultwarden, Wiki.js) can relay through the router by
+	// authenticating with their client key (username=client, password=key).
+	// The relay reuses the same pipeline as /send.
+	var relay *smtprelay.Server
+	if smtpAddr != "" {
+		relay = smtprelay.New(smtprelay.Config{
+			Addr:    smtpAddr,
+			Auth:    s, // server implements smtprelay.Authenticator
+			Deliver: s, // server implements smtprelay.Deliverer
+		})
+		if err := relay.Listen(); err != nil {
+			return err
+		}
+		fmt.Printf("smtp-router smtp relay listening on %s\n", smtpAddr)
+		rctx, rcancel := context.WithCancel(context.Background())
+		go func() { _ = relay.Serve(rctx) }()
+		defer func() {
+			rcancel()
+			_ = relay.Close()
+		}()
 	}
 
 	srv := &http.Server{

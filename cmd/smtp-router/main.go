@@ -29,13 +29,14 @@ func main() {
 	case "serve":
 		fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 		cfgPath := fs.String("config", "", "path to config file (env or YAML)")
-		addr := fs.String("addr", ":8080", "listen address")
+		addr := fs.String("addr", ":8080", "HTTP listen address")
+		smtpAddr := fs.String("smtp-addr", "", "SMTP relay listen address (empty disables the relay)")
 		dbPath := fs.String("db", "smtp-router.db", "sqlite audit database path")
 		if err := fs.Parse(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		if err := cli.Serve(*cfgPath, *addr, *dbPath); err != nil {
+		if err := cli.Serve(*cfgPath, *addr, *smtpAddr, *dbPath); err != nil {
 			fmt.Fprintln(os.Stderr, "serve:", err)
 			os.Exit(1)
 		}

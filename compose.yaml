@@ -1,13 +1,16 @@
 # harmonicr smtp-router — rootless Podman compose for the solo VM.
-# Runs under the deploy user, host networking, Caddy fronts smtp.harmonicr.com.
+# Runs under the deploy user, joined to the shared 'zitadel' bridge network so
+# downstream apps (Zulip/Zitadel/Vaultwarden/Wiki.js) can reach the SMTP relay
+# by container name. Caddy fronts smtp.harmonicr.com (HTTP + the public SMTP
+# port). The router reaches auth.harmonicr.com (OIDC) via caddy-tls on the
+# same network through extra_hosts.
 services:
   smtp-router:
     image: ghcr.io/thomasteoh/smtp-router:latest
     container_name: smtp-router
     restart: unless-stopped
-    network_mode: host
     userns_mode: keep-id:uid=10001,gid=10001
-    command: ["serve", "-config", "/opt/smtp-router/config.json", "-addr", ":52150", "-db", "/opt/smtp-router-data/smtp-router.db"]
+    command: ["serve", "-config", "/opt/smtp-router/config.json", "-addr", ":52150", "-smtp-addr", ":52151", "-db", "/opt/smtp-router-data/smtp-router.db"]
     environment:
       SMTP_ROUTER_ADMIN_TOKEN: ${SMTP_ROUTER_ADMIN_TOKEN}
       SMTP_ROUTER_DEFAULT_DAY: ${SMTP_ROUTER_DEFAULT_DAY}
@@ -19,10 +22,19 @@ services:
       # write container_file_t; without :Z the usr_t context denies writes).
       - /opt/smtp-router:/opt/smtp-router:rw,Z
       - smtp-router-data:/opt/smtp-router-data:Z
+    extra_hosts:
+      # OIDC discovery + token verification hit auth.harmonicr.com, which
+      # resolves to the host public IP (hairpin-blocked from the bridge). Route
+      # it through caddy-tls on the shared network instead.
+      - "auth.harmonicr.com:10.89.2.193"
+    networks:
+      - zitadel
     ports:
-      # Under host networking, ports is ignored; the router binds :52150 on the
-      # host. Caddy terminates TLS at smtp.harmonicr.com and proxies here.
+      # HTTP API (52150) — Caddy proxies smtp.harmonicr.com -> container:52150.
+      # SMTP relay (52151) — downstream apps reach it by container name on the
+      # zitadel network; external apps reach it via the published host port.
       - "52150:52150"
+      - "52151:52151"
     healthcheck:
       # The runtime is scratch (no shell/wget), so exec the binary's health
       # subcommand directly against the mounted DB.
@@ -30,6 +42,10 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+networks:
+  zitadel:
+    external: true
 
 volumes:
   smtp-router-data:

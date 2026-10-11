@@ -83,6 +83,24 @@ func (a *Auth) Clients() []string {
 	return out
 }
 
+// ValidateUserPass checks an SMTP AUTH user/pass pair against the client
+// store. username must be an exact client name, password the client's raw
+// API key. Returns the client name on success, "" on failure.
+func (a *Auth) ValidateUserPass(user, pass string) string {
+	if user == "" || pass == "" {
+		return ""
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	// byHash maps hash(secret) -> client name. Compute the password hash once
+	// and confirm it belongs to the named client (O(1)).
+	c, ok := a.byHash[hash(pass)]
+	if !ok || c != user {
+		return ""
+	}
+	return c
+}
+
 func hash(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])

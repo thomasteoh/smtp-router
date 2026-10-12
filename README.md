@@ -195,7 +195,9 @@ keep-id:uid=10001,gid=10001`) managed by a `deploy`-user systemd unit:
   the bridge, so `extra_hosts` routes it through the `caddy-tls` container
   (`10.89.2.193`) on the same network.
 - **Two listeners**: `:52150` is the HTTP JSON API (Caddy terminates TLS at
-  `smtp.harmonicr.com` and reverse-proxies to `smtp-router:52150`);
+  `smtp.harmonicr.com` and reverse-proxies to `127.0.0.1:52150` — the published
+  host port, since host Caddy is in the host netns and cannot reach the bridge
+  container IP);
   `:52151` is the SMTP-protocol relay. Downstream apps authenticate with SMTP
   AUTH using their client key (username = client name, password = API key) and
   relay mail through the same rules/rate-limit/provider/audit/webhook pipeline
@@ -234,7 +236,8 @@ SMTP host: smtp-router          (internal bridge apps, on the zitadel network)
 SMTP port: 52151
 SMTP username: <client name>   (e.g. zulip, zitadel, vaultwarden, wikijs)
 SMTP password: <client API key>
-STARTTLS: optional (the relay does not require TLS; use it if the app insists)
+STARTTLS: NOT supported (the relay returns `502 Command not implemented` for
+           STARTTLS; apps must use plaintext SMTP and set their TLS/SSL flag off)
 ```
 
 The relay is **fail-closed**: `AUTH` is required before `MAIL FROM`; there is

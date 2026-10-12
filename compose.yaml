@@ -30,7 +30,9 @@ services:
     networks:
       - zitadel
     ports:
-      # HTTP API (52150) — Caddy proxies smtp.harmonicr.com -> container:52150.
+      # HTTP API (52150) — host Caddy proxies smtp.harmonicr.com ->
+      # 127.0.0.1:52150 (the published host port; the host netns cannot reach
+      # the bridge container IP).
       # SMTP relay (52151) — downstream apps reach it by container name on the
       # zitadel network; external apps reach it via the published host port.
       - "52150:52150"

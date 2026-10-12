@@ -205,6 +205,44 @@ func (s *Server) handleConn(c net.Conn) {
 				}
 				continue
 			}
+			// AUTH LOGIN is two-step: challenge for username, then password.
+			// parseAuth returns ("","",true) for LOGIN; PLAIN always yields a
+			// non-empty user, so an empty user here unambiguously means LOGIN.
+			if user == "" && pass == "" {
+				// First step: prompt for the username (334).
+				if err := writeLine(w, "334 VXNlcm5hbWU6\r\n"); err != nil {
+					return
+				}
+				uline, err := readLine(r, 8192)
+				if err != nil {
+					return
+				}
+				udec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(uline))
+				if err != nil {
+					// Invalid base64 username: fail auth.
+					if err := writeLine(w, "501 Invalid base64\r\n"); err != nil {
+						return
+					}
+					continue
+				}
+				user = string(udec)
+				// Second step: prompt for the password (334).
+				if err := writeLine(w, "334 UGFzc3dvcmQ6\r\n"); err != nil {
+					return
+				}
+				pline, err := readLine(r, 8192)
+				if err != nil {
+					return
+				}
+				pdec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(pline))
+				if err != nil {
+					if err := writeLine(w, "501 Invalid base64\r\n"); err != nil {
+						return
+					}
+					continue
+				}
+				pass = string(pdec)
+			}
 			client := ""
 			if s.auth != nil {
 				client = s.auth.Validate(user, pass)
@@ -351,9 +389,13 @@ func writeLine(w *bufio.Writer, s string) error {
 	return w.Flush()
 }
 
-// parseAuth parses an AUTH argument. Supported: PLAIN <base64> and LOGIN
-// (base64 user/pass over two lines). It returns the decoded user/pass and
-// whether the syntax was recognized.
+// parseAuth parses an AUTH argument. Supported: PLAIN <base64> and LOGIN.
+// PLAIN decodes the full credentials (authzid\0user\0pass) in one line. LOGIN
+// is two-step: this returns (user="", pass="", ok=true) with the LOGIN
+// mechanism so the caller challenges for username then password. The caller
+// distinguishes LOGIN from PLAIN by the empty user/pass returned (PLAIN
+// always yields at least a non-empty user). It returns ok=false for an
+// unrecognized mechanism or malformed base64.
 func parseAuth(arg string) (user, pass string, ok bool) {
 	fields := strings.Fields(arg)
 	if len(fields) == 0 {
@@ -375,14 +417,8 @@ func parseAuth(arg string) (user, pass string, ok bool) {
 		}
 		return parts[1], parts[2], true
 	case "LOGIN":
-		if len(fields) < 2 {
-			return "", "", false
-		}
-		udec, err := base64.StdEncoding.DecodeString(fields[1])
-		if err != nil {
-			return "", "", false
-		}
-		return string(udec), "", false // password sent on next line
+		// Two-step: username and password are challenged separately.
+		return "", "", true
 	}
 	return "", "", false
 }

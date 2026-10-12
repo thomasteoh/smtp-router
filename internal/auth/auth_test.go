@@ -30,7 +30,8 @@ func TestKeysAreUnique(t *testing.T) {
 
 func TestAddLoadsConfigKey(t *testing.T) {
 	a := New()
-	a.Add("client-x", "known-secret")
+	// Config stores hash(raw), never raw — Add takes the stored hash directly.
+	a.Add("client-x", HashHex("known-secret"))
 	if got := a.Validate("known-secret"); got != "client-x" {
 		t.Fatalf("validate = %q, want client-x", got)
 	}

@@ -49,11 +49,15 @@ func (a *Auth) Generate(client string) (string, error) {
 	return secret, nil
 }
 
-// Add registers an existing key hash for a client (used when loading config).
+// Add registers an existing key for a client. When loading config, `secret`
+// is ALREADY the stored SHA-256 hash (config stores hash(raw), never raw), so
+// it is placed directly as the map key — re-hashing here would double-hash and
+// invalidate every key after a restart. `Generate` stores hash(raw); this
+// places hash(raw) too, so both paths agree on byHash[hash(raw)].
 func (a *Auth) Add(client, secret string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.byHash[hash(secret)] = client
+	a.byHash[secret] = client
 }
 
 // Validate checks a presented key and returns the client name, or an empty

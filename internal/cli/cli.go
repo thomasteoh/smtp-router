@@ -41,8 +41,9 @@ func Serve(cfgPath, addr, smtpAddr, dbPath string) error {
 	}
 	defer ad.Close()
 
-	// Wire auth: load clients from config (keys are already hashed in config,
-	// but the config stores raw — treat as secret and hash at load).
+	// Wire auth: load clients from config. Config stores hash(raw) (never raw),
+	// so Add places the stored hash directly — re-hashing here would double-hash
+	// and invalidate every client key after a restart.
 	au := auth.New()
 	for name, c := range cfg.Clients {
 		au.Add(name, c.Key)

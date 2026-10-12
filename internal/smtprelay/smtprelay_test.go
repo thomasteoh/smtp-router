@@ -283,6 +283,84 @@ func TestParseAuthPlain(t *testing.T) {
 	}
 }
 
+func TestAuthLoginTwoStep(t *testing.T) {
+	// AUTH LOGIN is two-step: 334 username, 334 password, 235 success.
+	auth := testAuth{user: "zulip", pass: "secret"}
+	d := &testDeliver{code: 250}
+	addr := startServer(t, auth, d)
+	c, r, w := dial(t, addr)
+	defer c.Close()
+
+	sendLine(t, w, "EHLO test")
+	for {
+		line := readResp(t, r)
+		if strings.HasPrefix(line, "250 ") {
+			break
+		}
+	}
+
+	sendLine(t, w, "AUTH LOGIN")
+	if l := readResp(t, r); !strings.HasPrefix(l, "334") {
+		t.Fatalf("username challenge = %q, want 334", l)
+	}
+	sendLine(t, w, base64.StdEncoding.EncodeToString([]byte("zulip")))
+	if l := readResp(t, r); !strings.HasPrefix(l, "334") {
+		t.Fatalf("password challenge = %q, want 334", l)
+	}
+	sendLine(t, w, base64.StdEncoding.EncodeToString([]byte("secret")))
+	if l := readResp(t, r); !strings.HasPrefix(l, "235") {
+		t.Fatalf("success = %q, want 235", l)
+	}
+}
+
+func TestAuthLoginWrongPass(t *testing.T) {
+	auth := testAuth{user: "zulip", pass: "secret"}
+	d := &testDeliver{code: 250}
+	addr := startServer(t, auth, d)
+	c, r, w := dial(t, addr)
+	defer c.Close()
+
+	sendLine(t, w, "EHLO test")
+	for {
+		line := readResp(t, r)
+		if strings.HasPrefix(line, "250 ") {
+			break
+		}
+	}
+
+	sendLine(t, w, "AUTH LOGIN")
+	readResp(t, r) // 334 username
+	sendLine(t, w, base64.StdEncoding.EncodeToString([]byte("zulip")))
+	readResp(t, r) // 334 password
+	sendLine(t, w, base64.StdEncoding.EncodeToString([]byte("wrong")))
+	if l := readResp(t, r); !strings.HasPrefix(l, "535") {
+		t.Fatalf("wrong pass = %q, want 535", l)
+	}
+}
+
+func TestAuthLoginInvalidBase64(t *testing.T) {
+	auth := testAuth{user: "zulip", pass: "secret"}
+	d := &testDeliver{code: 250}
+	addr := startServer(t, auth, d)
+	c, r, w := dial(t, addr)
+	defer c.Close()
+
+	sendLine(t, w, "EHLO test")
+	for {
+		line := readResp(t, r)
+		if strings.HasPrefix(line, "250 ") {
+			break
+		}
+	}
+
+	sendLine(t, w, "AUTH LOGIN")
+	readResp(t, r) // 334 username
+	sendLine(t, w, "not-base64!!")
+	if l := readResp(t, r); !strings.HasPrefix(l, "501") {
+		t.Fatalf("invalid base64 = %q, want 501", l)
+	}
+}
+
 func TestParsePath(t *testing.T) {
 	cases := []struct {
 		in, want string

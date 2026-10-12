@@ -37,7 +37,7 @@ func newTestServer(t *testing.T, cfg *config.Config) (*Server, *stubSender, stri
 	cfg.AdminToken = "admin-secret"
 	cfg.DefaultRate = config.Rate{Day: 100, Month: 1000}
 	au := auth.New()
-	au.Add("billing", "raw-key-billing")
+	au.Add("billing", auth.HashHex("raw-key-billing"))
 	cfg.Clients = map[string]config.Client{"billing": {Name: "billing", Key: auth.HashHex("raw-key-billing")}}
 	ad, err := audit.Open(":memory:")
 	if err != nil {
@@ -112,7 +112,7 @@ func TestFromBinding(t *testing.T) {
 		Allowlist: []string{"billing@harmonicr.com", "sales@harmonicr.com"},
 	}
 	au := auth.New()
-	au.Add("billing", "raw-key-billing")
+	au.Add("billing", auth.HashHex("raw-key-billing"))
 	cfg.Clients = map[string]config.Client{
 		"billing": {Name: "billing", Key: auth.HashHex("raw-key-billing"), AllowedFrom: []string{"billing@harmonicr.com"}},
 	}
@@ -167,7 +167,7 @@ func TestConcurrentSendAndAdmin(t *testing.T) {
 		Allowlist:  []string{"a@x.com"},
 	}
 	au := auth.New()
-	au.Add("billing", "raw-key-billing")
+	au.Add("billing", auth.HashHex("raw-key-billing"))
 	cfg.Clients = map[string]config.Client{"billing": {Name: "billing", Key: auth.HashHex("raw-key-billing")}}
 	ad, _ := audit.Open(":memory:")
 	s := &Server{cfg: cfg, auth: au, audit: ad, limit: ratelimit.New(), rules: rules.New(cfg.Allowlist, cfg.Denylist), prov: map[string]provider.Sender{"smtp": &stubSender{}}}

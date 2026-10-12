@@ -1,0 +1,12 @@
+[Unit]
+Description=Run weekly podman image prune
+ConditionPathExists=/home/deploy/.local/share/podman-prune/prune-images.sh
+
+[Timer]
+OnCalendar=Mon *-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=600
+Unit=podman-prune.service
+
+[Install]
+WantedBy=timers.target

@@ -9,7 +9,7 @@ on:
 env:
   IMAGE: ghcr.io/thomasteoh/smtp-router
   # Pin a patch release that fixes known stdlib CVEs (see govulncheck).
-  GO_VERSION: "1.26.9"
+  GO_VERSION: "1.26.10"
 
 jobs:
   test:
@@ -35,7 +35,10 @@ jobs:
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          # CI runner's network to vuln.go.dev is blocked (fetch fails with
+          # "unrecognized vulndb format"). pkg.go.dev/vuln/ is proxy-backed and
+          # reachable — GOVULNDB overrides the DB source so the scan can run.
+          GOVULNDB="https://pkg.go.dev/vuln/" govulncheck ./...
       - name: gosec
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@latest

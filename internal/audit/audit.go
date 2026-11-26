@@ -119,9 +119,6 @@ func (s *Store) ProviderStatuses() (map[string]ProviderStatus, error) {
 		}
 		out[st.Name] = st
 	}
-	if out == nil {
-		out = map[string]ProviderStatus{}
-	}
 	return out, rows.Err()
 }
 

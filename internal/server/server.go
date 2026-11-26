@@ -117,6 +117,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/providers", s.gateAdmin(s.adminAddProvider))
 	mux.HandleFunc("GET /admin/providers", s.gateAdmin(s.adminListProviders))
 	mux.HandleFunc("DELETE /admin/providers/{name}", s.gateAdmin(s.adminDeleteProvider))
+	mux.HandleFunc("POST /admin/providers/{name}/test", s.gateAdmin(s.adminTestProvider))
 	mux.HandleFunc("POST /admin/accounts", s.gateAdmin(s.adminAddAccount))
 	mux.HandleFunc("GET /admin/accounts", s.gateAdmin(s.adminListAccounts))
 	mux.HandleFunc("DELETE /admin/accounts/{from}", s.gateAdmin(s.adminDeleteAccount))
@@ -397,11 +398,21 @@ func (s *Server) DeliverJob(ctx context.Context, job queue.Job) (string, error) 
 		return "", fmt.Errorf("provider %q not found", provName)
 	}
 	if err := sender.Deliver(ctx, msg); err != nil {
+		if s.audit != nil {
+			if rerr := s.audit.RecordProviderStatus(provName, audit.StatusError, err.Error()); rerr != nil {
+				log.Printf("record provider status: %v", rerr)
+			}
+		}
 		return "", err
 	}
 
 	// Record success and fire webhook.
 	s.record(job.Client, jobToSendRequest(job), audit.StatusDelivered, "", job.RequestID)
+	if s.audit != nil {
+		if rerr := s.audit.RecordProviderStatus(provName, audit.StatusDelivered, ""); rerr != nil {
+			log.Printf("record provider status: %v", rerr)
+		}
+	}
 	if s.hook != nil {
 		s.hook.Fire(ctx, webhook.EventDelivered, map[string]any{
 			"client": job.Client, "from": job.From, "provider": provName,
@@ -534,6 +545,11 @@ func (s *Server) deliver(ctx context.Context, client string, req SendRequest) (s
 	if err := sender.Deliver(ctx, msg); err != nil {
 		s.errors.Add(1)
 		s.record(client, req, audit.StatusError, err.Error(), req.RequestID)
+		if s.audit != nil {
+			if rerr := s.audit.RecordProviderStatus(provName, audit.StatusError, err.Error()); rerr != nil {
+				log.Printf("record provider status: %v", rerr)
+			}
+		}
 		if s.hook != nil {
 			s.hook.Fire(ctx, webhook.EventError, map[string]any{
 				"client": client, "from": req.From, "provider": provName, "error": err.Error(),
@@ -544,6 +560,11 @@ func (s *Server) deliver(ctx context.Context, client string, req SendRequest) (s
 
 	s.delivered.Add(1)
 	s.record(client, req, audit.StatusDelivered, "", req.RequestID)
+	if s.audit != nil {
+		if rerr := s.audit.RecordProviderStatus(provName, audit.StatusDelivered, ""); rerr != nil {
+			log.Printf("record provider status: %v", rerr)
+		}
+	}
 	if s.hook != nil {
 		s.hook.Fire(ctx, webhook.EventDelivered, map[string]any{
 			"client": client, "from": req.From, "provider": provName,
@@ -864,14 +885,33 @@ func (s *Server) adminAddRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "action": req.Action, "rule": req.Rule})
 }
 
-// adminListProviders lists the configured providers (admin).
+// adminListProviders lists the configured providers (admin), merged with the
+// latest recorded delivery/test outcome (status, last_used, last_error) from
+// the audit store.
 func (s *Server) adminListProviders(w http.ResponseWriter, r *http.Request) {
+	var statuses map[string]audit.ProviderStatus
+	if s.audit != nil {
+		if st, err := s.audit.ProviderStatuses(); err != nil {
+			log.Printf("provider status: %v", err)
+		} else {
+			statuses = st
+		}
+	}
 	s.mu.RLock()
 	out := make([]map[string]any, 0, len(s.cfg.Providers))
 	for _, p := range s.cfg.Providers {
+		status := ""
+		lastUsed := ""
+		lastErr := ""
+		if st, ok := statuses[p.Name]; ok {
+			status = st.Status
+			lastUsed = st.LastUsed
+			lastErr = st.LastError
+		}
 		out = append(out, map[string]any{
 			"name": p.Name, "type": p.Type, "host": p.Host, "port": p.Port,
 			"url": p.URL, "method": p.Method, "tls": p.TLS, "starttls": p.StartTLS,
+			"status": status, "last_used": lastUsed, "last_error": lastErr,
 		})
 	}
 	s.mu.RUnlock()
@@ -894,6 +934,52 @@ func (s *Server) adminDeleteProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 	http.Error(w, "provider not found", http.StatusNotFound)
+}
+
+// adminTestProvider sends a minimal test message through the named provider
+// (admin) and records the outcome as the provider's latest status. It is the
+// way to validate a provider when it is added (or re-validate it later). The
+// test message is small and self-addressed so it never leaks to a third
+// party: the recipient is the same as the From address.
+func (s *Server) adminTestProvider(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.mu.RLock()
+	sender, ok := s.prov[name]
+	if !ok || sender == nil {
+		s.mu.RUnlock()
+		http.Error(w, "provider not found", http.StatusNotFound)
+		return
+	}
+	// Use the provider's own From as the test recipient (a self-test). If the
+	// account is configured, prefer its From address.
+	from := name + "@test.local"
+	if acc, ok := s.cfg.LookupAccount(name); ok && acc.From != "" {
+		from = acc.From
+	}
+	s.mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	msg := provider.Message{
+		From:    from,
+		To:      []string{from},
+		Subject: "smtp-router provider test",
+		Body:    "provider connectivity test",
+	}
+	status := audit.StatusDelivered
+	errMsg := ""
+	if err := sender.Deliver(ctx, msg); err != nil {
+		status = audit.StatusError
+		errMsg = err.Error()
+	}
+	if s.audit != nil {
+		if err := s.audit.RecordProviderStatus(name, status, errMsg); err != nil {
+			log.Printf("record provider status: %v", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": status == audit.StatusDelivered, "status": status, "error": errMsg,
+	})
 }
 
 // adminListAccounts lists the configured accounts (admin).

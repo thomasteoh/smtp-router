@@ -101,7 +101,7 @@ pre { background: var(--bg); color: var(--text); padding: 0.6rem; border-radius:
 
   <section class="card">
     <h2>Providers</h2>
-    <table id="provTable"><thead><tr><th>name</th><th>type</th><th>host/url</th><th>port</th><th>tls</th><th></th></tr></thead><tbody></tbody></table>
+    <table id="provTable"><thead><tr><th>name</th><th>type</th><th>host/url</th><th>port</th><th>tls</th><th>status</th><th>last used</th><th></th></tr></thead><tbody></tbody></table>
     <h3>Add provider</h3>
     <div class="row">
       <label>name <input id="pName" placeholder="smtp"></label>
@@ -219,6 +219,19 @@ async function loadProviders() {
   for (const p of provs) {
     const tr = document.createElement('tr');
     tr.append(cell(p.name), cell(p.type), cell(p.type === 'api' ? p.url : p.host), cell(p.port), cell(p.tls || p.starttls ? 'TLS' : ''));
+    tr.append(cell(p.status || '—'), cell(p.last_used || '—'));
+    const test = document.createElement('button');
+    test.textContent = 'test';
+    test.onclick = async () => {
+      test.disabled = true; test.textContent = 'testing…';
+      try {
+        const r = await api('/admin/providers/' + encodeURIComponent(p.name) + '/test', {}, 'POST');
+        msg('provider test ' + p.name + ': ' + r.status + (r.error ? ' (' + r.error + ')' : ''), r.ok);
+      } catch (e) { msg(e.message, false); }
+      test.disabled = false; test.textContent = 'test';
+      loadProviders();
+    };
+    tr.appendChild(test);
     tr.appendChild(delBtn('/admin/providers/' + encodeURIComponent(p.name), p.name, loadProviders));
     tb.appendChild(tr);
   }

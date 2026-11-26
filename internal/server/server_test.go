@@ -386,6 +386,61 @@ func TestPortalRouteRegistered(t *testing.T) {
 	}
 }
 
+func TestAdminProviderTestAndStatus(t *testing.T) {
+	cleanup := startFakeSMTP(t)
+	defer cleanup()
+	cfg := &config.Config{
+		AdminToken: "tok",
+		Providers:  []config.Provider{{Name: "smtp", Type: "smtp", Host: "127.0.0.1", Port: 2525}},
+		Accounts:   map[string]config.Account{"a@h.com": {From: "a@h.com", Provider: "smtp"}},
+		Allowlist:  []string{"*@h.com"},
+	}
+	au := auth.New()
+	ad, _ := audit.Open(":memory:")
+	defer ad.Close()
+	lim := ratelimit.New()
+	rl := rules.New(cfg.Allowlist, cfg.Denylist)
+	s, _ := New(cfg, au, ad, lim, rl, webhook.New(nil), &oidc.Verifier{})
+	s.SetConfigPath(t.TempDir() + "/cfg.json")
+	h := s.Handler()
+
+	// List providers: no status yet.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/admin/providers", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"status":""`) {
+		t.Fatalf("list providers: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Test the provider.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/admin/providers/smtp/test", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"status":"delivered"`) {
+		t.Fatalf("test provider: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Status now recorded.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/admin/providers", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"status":"delivered"`) || !strings.Contains(rec.Body.String(), `"last_used":"`) {
+		t.Fatalf("list providers after test: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Unknown provider -> 404.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/admin/providers/nope/test", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	h.ServeHTTP(rec, req)
+	if rec.Code != 404 {
+		t.Fatalf("test unknown provider status = %d, want 404", rec.Code)
+	}
+}
+
 func TestAdminListAndDelete(t *testing.T) {
 	cfg := &config.Config{
 		AdminToken: "tok",

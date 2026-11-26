@@ -43,6 +43,16 @@ func Open(path string) (*Store, error) {
 	)`); err != nil {
 		return nil, fmt.Errorf("create audit table: %w", err)
 	}
+	// provider_status tracks the latest delivery/test outcome per provider
+	// (status, last used timestamp, last error). One row per provider name.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS provider_status (
+		name TEXT PRIMARY KEY,
+		status TEXT NOT NULL,
+		last_used TEXT NOT NULL,
+		last_error TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		return nil, fmt.Errorf("create provider_status table: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -67,6 +77,52 @@ type Row struct {
 	Status    string
 	Error     string
 	RequestID string
+}
+
+// ProviderStatus is the latest recorded outcome for a provider.
+type ProviderStatus struct {
+	Name      string
+	Status    string
+	LastUsed  string // RFC3339 timestamp (empty when never used)
+	LastError string
+}
+
+// RecordProviderStatus upserts the latest delivery/test outcome for a
+// provider. Status is typically audit.StatusDelivered or audit.StatusError;
+// lastError is the failure message (empty on success).
+func (s *Store) RecordProviderStatus(name, status, lastError string) error {
+	ts := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(`INSERT INTO provider_status (name, status, last_used, last_error)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET status=excluded.status,
+			last_used=excluded.last_used, last_error=excluded.last_error`,
+		name, status, ts, lastError)
+	if err != nil {
+		return fmt.Errorf("record provider status: %w", err)
+	}
+	return nil
+}
+
+// ProviderStatuses returns the status row for every provider that has one,
+// keyed by provider name. Providers never used have no row.
+func (s *Store) ProviderStatuses() (map[string]ProviderStatus, error) {
+	rows, err := s.db.Query(`SELECT name, status, last_used, last_error FROM provider_status`)
+	if err != nil {
+		return nil, fmt.Errorf("list provider status: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]ProviderStatus)
+	for rows.Next() {
+		var st ProviderStatus
+		if err := rows.Scan(&st.Name, &st.Status, &st.LastUsed, &st.LastError); err != nil {
+			return nil, err
+		}
+		out[st.Name] = st
+	}
+	if out == nil {
+		out = map[string]ProviderStatus{}
+	}
+	return out, rows.Err()
 }
 
 // List returns the most recent audit rows, newest first, limited to n

@@ -69,22 +69,22 @@ func (s *Store) Record(client, from, provider, status, errMsg, requestID string)
 
 // Row is one audit entry.
 type Row struct {
-	ID        int64
-	TS        string
-	Client    string
-	From      string
-	Provider  string
-	Status    string
-	Error     string
-	RequestID string
+	ID        int64  `json:"id"`
+	TS        string `json:"ts"`
+	Client    string `json:"client"`
+	From      string `json:"from"`
+	Provider  string `json:"provider"`
+	Status    string `json:"status"`
+	Error     string `json:"error"`
+	RequestID string `json:"request_id"`
 }
 
 // ProviderStatus is the latest recorded outcome for a provider.
 type ProviderStatus struct {
-	Name      string
-	Status    string
-	LastUsed  string // RFC3339 timestamp (empty when never used)
-	LastError string
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	LastUsed  string `json:"last_used"`  // RFC3339 timestamp (empty when never used)
+	LastError string `json:"last_error"`
 }
 
 // RecordProviderStatus upserts the latest delivery/test outcome for a

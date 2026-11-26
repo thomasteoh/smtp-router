@@ -146,7 +146,7 @@ pre { background: var(--bg); color: var(--text); padding: 0.6rem; border-radius:
   <section class="card">
     <h2>Audit</h2>
     <div class="row"><button onclick="loadAudit()">refresh</button><span id="auditOut"></span></div>
-    <table id="auditTable"><thead><tr><th>time</th><th>client</th><th>from</th><th>status</th><th>provider</th></tr></thead><tbody></tbody></table>
+    <table id="auditTable"><thead><tr><th>time</th><th>client</th><th>from</th><th>status</th><th>provider</th><th>error</th></tr></thead><tbody></tbody></table>
   </section>
 </main>
 <script>
@@ -265,7 +265,7 @@ async function loadAudit() {
     const rows = await api('/admin/audit?n=50');
     const tb = document.getElementById('auditTable').querySelector('tbody');
     tb.innerHTML = '';
-    for (const r of rows) { const tr = document.createElement('tr'); tr.append(cell(r.ts||r.TS||''), cell(r.client||''), cell(r.from||''), cell(r.status||''), cell(r.provider||'')); tb.appendChild(tr); }
+    for (const r of rows) { const tr = document.createElement('tr'); tr.append(cell(r.ts||r.TS||''), cell(r.client||''), cell(r.from||''), cell(r.status||''), cell(r.provider||''), cell(r.error||'')); tb.appendChild(tr); }
     out.textContent = 'ok';
   } catch (e) { out.textContent = e.message; }
 }

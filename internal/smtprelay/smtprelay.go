@@ -20,7 +20,12 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -50,6 +55,7 @@ type RelayMessage struct {
 	To      []string
 	Subject string
 	Body    string
+	HTML    string
 	Headers map[string]string
 }
 
@@ -319,7 +325,8 @@ func (s *Server) handleConn(c net.Conn) {
 			body.WriteString(msg)
 			// Parse headers (up to the blank line) from the DATA body.
 			headers, bodyText := splitHeaders(msg)
-			relay := RelayMessage{From: from, To: to, Subject: headers["Subject"], Body: bodyText, Headers: headers}
+			plain, html := parseMIMEBody(headers, bodyText)
+			relay := RelayMessage{From: from, To: to, Subject: headers["Subject"], Body: plain, HTML: html, Headers: headers}
 			code, resp := s.deliver.Deliver(s.ctx, authUser, relay)
 			if err := writeLine(w, fmt.Sprintf("%d %s\r\n", code, resp)); err != nil {
 				return
@@ -526,4 +533,105 @@ func splitHeaders(data string) (map[string]string, string) {
 	body = strings.TrimPrefix(body, "\r\n")
 	body = strings.TrimPrefix(body, "\n")
 	return headers, body
+}
+
+// parseMIMEBody extracts the plain-text and HTML parts from a MIME message
+// body. It handles the common structures a client may send:
+//
+//   - no multipart: the body is plain text (returned as the plain part)
+//   - multipart/alternative: text/plain -> plain, text/html -> html
+//   - multipart/mixed / related: walk each part; a nested
+//     multipart/alternative is recursed into. Attachments are skipped.
+//
+// Transfer encodings (base64, quoted-printable, 7bit/8bit) are decoded so the
+// extracted text is the actual rendered content, not the encoded wire form.
+// If no HTML part is found, html is empty (the caller sends plain only).
+func parseMIMEBody(headers map[string]string, body string) (plain, html string) {
+	ct := headers["Content-Type"]
+	mediaType, params, err := mime.ParseMediaType(ct)
+	if err != nil || mediaType == "" {
+		// No (or invalid) Content-Type: treat the whole body as plain text.
+		return body, ""
+	}
+	if !strings.HasPrefix(mediaType, "multipart/") {
+		return decodeText(headers["Content-Transfer-Encoding"], body), ""
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return body, ""
+	}
+	plain, html = parseMultipart(body, boundary)
+	return plain, html
+}
+
+// parseMultipart walks a multipart body, extracting the first text/plain and
+// first text/html parts. It recurses into nested multipart/* parts (e.g. a
+// multipart/alternative inside a multipart/mixed). Non-text parts
+// (attachments, images, etc.) are skipped.
+func parseMultipart(body, boundary string) (plain, html string) {
+	r := multipart.NewReader(strings.NewReader(body), boundary)
+	for {
+		part, err := r.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Malformed multipart; stop and return what we have.
+			break
+		}
+		ph := textproto.MIMEHeader(part.Header)
+		pmt, pparams, err := mime.ParseMediaType(ph.Get("Content-Type"))
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(pmt, "multipart/") {
+			pb, _ := io.ReadAll(part)
+			if pboundary := pparams["boundary"]; pboundary != "" {
+				np, nh := parseMultipart(string(pb), pboundary)
+				if plain == "" {
+					plain = np
+				}
+				if html == "" {
+					html = nh
+				}
+			}
+			continue
+		}
+		pdata, _ := io.ReadAll(part)
+		switch pmt {
+		case "text/plain":
+			if plain == "" {
+				plain = decodeText(ph.Get("Content-Transfer-Encoding"), string(pdata))
+			}
+		case "text/html":
+			if html == "" {
+				html = decodeText(ph.Get("Content-Transfer-Encoding"), string(pdata))
+			}
+		}
+	}
+	return plain, html
+}
+
+// decodeText decodes a text part's transfer encoding. It handles base64 and
+// quoted-printable; 7bit/8bit/binary pass through unchanged. The charset
+// parameter is ignored (we keep the raw bytes; callers expect UTF-8/ASCII
+// text in practice).
+func decodeText(cte, data string) string {
+	switch strings.ToLower(strings.TrimSpace(cte)) {
+	case "base64":
+		dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(data))
+		if err == nil {
+			return string(dec)
+		}
+		return data
+	case "quoted-printable":
+		r := quotedprintable.NewReader(strings.NewReader(data))
+		if b, err := io.ReadAll(r); err == nil {
+			return string(b)
+		}
+		return data
+	default:
+		// 7bit, 8bit, binary, or absent.
+		return data
+	}
 }

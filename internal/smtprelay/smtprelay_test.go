@@ -361,6 +361,143 @@ func TestAuthLoginInvalidBase64(t *testing.T) {
 	}
 }
 
+func TestParseMIMEBodyMultipartAlternative(t *testing.T) {
+	// A multipart/alternative email (the form Zitadel/Gmail send): plain text
+	// + HTML. The relay must extract the HTML part, not pass the raw MIME.
+	headers := map[string]string{
+		"Content-Type": `multipart/alternative; boundary="b0und4ry"`,
+	}
+	body := "--b0und4ry\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"\r\n" +
+		"Plain text body here\r\n" +
+		"--b0und4ry\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"\r\n" +
+		"<html><body><p>Hello <b>world</b></p></body></html>\r\n" +
+		"--b0und4ry--\r\n"
+	plain, html := parseMIMEBody(headers, body)
+	if !strings.Contains(plain, "Plain text body here") {
+		t.Fatalf("plain = %q, want the plain-text part", plain)
+	}
+	if !strings.Contains(html, "<p>Hello <b>world</b></p>") {
+		t.Fatalf("html = %q, want the HTML part (no boundary markers)", html)
+	}
+	if strings.Contains(html, "b0und4ry") || strings.Contains(html, "Content-Type:") {
+		t.Fatalf("html = %q, must not contain MIME boundary/markers", html)
+	}
+}
+
+func TestParseMIMEBodyQuotedPrintable(t *testing.T) {
+	// The HTML part is quoted-printable encoded; the relay must decode it.
+	headers := map[string]string{
+		"Content-Type": `multipart/alternative; boundary="xyz"`,
+	}
+	body := "--xyz\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"\r\n" +
+		"plain\r\n" +
+		"--xyz\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"Content-Transfer-Encoding: quoted-printable\r\n" +
+		"\r\n" +
+		"<p>Hello=20world</p>\r\n" +
+		"--xyz--\r\n"
+	_, html := parseMIMEBody(headers, body)
+	if !strings.Contains(html, "Hello world") {
+		t.Fatalf("html = %q, want decoded quoted-printable (Hello world)", html)
+	}
+}
+
+func TestParseMIMEBodyPlainOnly(t *testing.T) {
+	// No Content-Type / no multipart: the body is plain text.
+	headers := map[string]string{"Content-Type": "text/plain; charset=utf-8"}
+	plain, html := parseMIMEBody(headers, "Just some text")
+	if plain != "Just some text" || html != "" {
+		t.Fatalf("plain=%q html=%q, want plain only", plain, html)
+	}
+}
+
+func TestParseMIMEBodyBase64(t *testing.T) {
+	// A base64-encoded HTML part is decoded.
+	enc := base64.StdEncoding.EncodeToString([]byte("<p>Hello</p>"))
+	headers := map[string]string{
+		"Content-Type": `multipart/alternative; boundary="b"`,
+	}
+	body := "--b\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"\r\n" +
+		"plain\r\n" +
+		"--b\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"Content-Transfer-Encoding: base64\r\n" +
+		"\r\n" +
+		enc + "\r\n" +
+		"--b--\r\n"
+	_, html := parseMIMEBody(headers, body)
+	if !strings.Contains(html, "<p>Hello</p>") {
+		t.Fatalf("html = %q, want decoded base64 HTML", html)
+	}
+}
+
+func TestRelayDeliversHTML(t *testing.T) {
+	// End-to-end: a multipart/alternative email over SMTP reaches the
+	// deliverer with both the plain and HTML parts separated.
+	auth := testAuth{user: "zitadel", pass: "secret"}
+	d := &testDeliver{code: 250}
+	addr := startServer(t, auth, d)
+	c, r, w := dial(t, addr)
+	defer c.Close()
+
+	sendLine(t, w, "EHLO test")
+	for {
+		line := readResp(t, r)
+		if strings.HasPrefix(line, "250 ") {
+			break
+		}
+	}
+	creds := base64.StdEncoding.EncodeToString([]byte("\x00zitadel\x00secret"))
+	sendLine(t, w, "AUTH PLAIN "+creds)
+	_ = readResp(t, r)
+	sendLine(t, w, "MAIL FROM:<noreply@harmonicr.com>")
+	_ = readResp(t, r)
+	sendLine(t, w, "RCPT TO:<someone@harmonicr.com>")
+	_ = readResp(t, r)
+	sendLine(t, w, "DATA")
+	_ = readResp(t, r)
+
+	// A multipart/alternative message (HTML present).
+	msg := "Subject: Verify\r\n" +
+		"Content-Type: multipart/alternative; boundary=\"bb\"\r\n" +
+		"\r\n" +
+		"--bb\r\n" +
+		"Content-Type: text/plain; charset=utf-8\r\n" +
+		"\r\n" +
+		"Click the link to verify.\r\n" +
+		"--bb\r\n" +
+		"Content-Type: text/html; charset=utf-8\r\n" +
+		"\r\n" +
+		"<a href=\"https://x\">Verify</a>\r\n" +
+		"--bb--\r\n" +
+		".\r\n"
+	_, err := w.WriteString(msg)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = w.Flush()
+	_ = readResp(t, r)
+
+	if d.got.Body == "" || !strings.Contains(d.got.Body, "Click the link") {
+		t.Fatalf("delivered Body = %q, want the plain part", d.got.Body)
+	}
+	if d.got.HTML == "" || !strings.Contains(d.got.HTML, "<a href=\"https://x\">Verify</a>") {
+		t.Fatalf("delivered HTML = %q, want the HTML part", d.got.HTML)
+	}
+	if strings.Contains(d.got.HTML, "--bb") {
+		t.Fatalf("delivered HTML = %q, must not contain MIME boundary", d.got.HTML)
+	}
+}
+
 func TestParsePath(t *testing.T) {
 	cases := []struct {
 		in, want string

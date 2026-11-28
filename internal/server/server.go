@@ -440,8 +440,8 @@ func (s *Server) Deliver(ctx context.Context, client string, msg smtprelay.Relay
 		To:        msg.To,
 		Subject:   msg.Subject,
 		Body:      msg.Body,
-		// SMTP has no HTML part; the body is the plain text.
-		Provider: "",
+		HTML:      msg.HTML, // extracted from the multipart body, if present
+		Provider:  "",
 	}
 	// Reuse the shared synchronous pipeline. The SMTP path never uses the
 	// async queue (a client is waiting on the wire), so we force the sync
